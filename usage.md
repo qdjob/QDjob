@@ -107,6 +107,9 @@
    * 关于`arm64`格式：
        - 可以使用在`安卓端termux`或者`树莓派`等arm64架构的linux系统来执行本程序 
        - 由于无法打包图形界面，所以请使用其他端的`QDjob_editor`配置用户完毕后，复制`cookies`文件夹以及配置文件`config.json`到对应的arm64 linux系统下执行程序。
+   * 关于报毒问题：
+       - **解决方案一：关闭windows defender自带的实时扫描**  打开设置->更新与安全->Windows安全中心->打开windows安全中心，左边点击「病毒和威胁」，然后找到「实时扫描」并关闭
+       - **解决方案二：使用standalone打包版本**  在[release](https://github.com/JaniQuiz/QDjob/releases)中找到`QDjob_windows_standalone.zip`使用，详细见下面说明。
    * 关于`standalone`模式打包版本：
        - 该版本用于解决部分电脑对本程序报毒问题。
        - `QDjob`和`QDjob_editor`在该版本被打包到了一起，其他依赖文件和文件夹默认隐藏。
