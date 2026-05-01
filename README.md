@@ -62,6 +62,7 @@
 
 ## 使用方法
 [使用方法](https://github.com/JaniQuiz/QDjob/blob/main/usage.md)
+[常见错误与解决方案](error_resolution.md)
 
  * 程序本体**免费使用**，仅自动过图形验证码功能需要获取tokenid(验证码指任务执行过程中的图形验证码，并非登录用到的手机验证码)  
  * 如何获取tokenid: [我的网站](https://shop.janiquiz.dpdns.org)  或者 [我的咸鱼主页](https://m.tb.cn/h.7YjEhOz?tk=2VRJfsPwg93)
