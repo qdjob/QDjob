@@ -12,7 +12,7 @@ import sys, random
 import os
 import platform
 
-__version__ = 'v1.3.2'
+__version__ = 'v1.3.3'
 
 system = platform.system()
 if system == "Windows":
@@ -550,15 +550,20 @@ class ConfigEditor:
                 # 如果config.json中也没有配置，默认使用一个基本格式
                 user_agent = "Mozilla/5.0 (Linux; Android 13; PDEM10 Build/TP1A.220905.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/109.0.5414.86 MQQBrowser/6.2 TBS/047601 Mobile Safari/537.36 QDJSSDK/1.0 QDNightStyle_1 QDReaderAndroid/7.9.384/1466/1000032/OPPO/QDShowNativeLoading"
         
-        # 调用check_login_status函数
+        ibex = user.get("ibex", "")
+        if not ibex:
+            messagebox.showwarning("警告", f"用户 '{username}' 的ibex未配置")
+            return
+
         try:
-            is_logged_in = check_login_status(user_agent, cookies)
-            if is_logged_in:
-                messagebox.showinfo("登录状态", f"用户 '{username}' 已登录✅", icon='info')
-            else:
-                messagebox.showwarning("登录状态", f"用户 '{username}' 未登录或登录已过期⚠️", icon='warning')
+            is_main_logged_in = check_login_status(user_agent, cookies)
+            is_adv_logged_in = check_login_risk(user_agent, cookies, ibex)
+            main_status = "✅主页已登录" if is_main_logged_in else "❌主页未登录或者已过期"
+            adv_status = "✅福利中心已登录" if is_adv_logged_in else "❌福利中心未登录或者已过期"
         except Exception as e:
-            messagebox.showerror("错误", f"检测登录状态时出错: {str(e)}", icon='error')
+            messagebox.showerror("错误", f"检测登录风险状态时出错: {str(e)}", icon='error')
+        
+        messagebox.showinfo("登录状态", f"用户 '{username}' 的登录状态:\n主页: {main_status}\n福利中心: {adv_status}", icon='info')
 
     def check_login_risk_for_selected_user(self):
         """检测选中用户的登录风险状态"""

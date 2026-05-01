@@ -11,7 +11,7 @@ from push import *
 from logger import LoggerManager
 from logger import DEFAULT_LOG_RETENTION
 
-__version__ = 'v1.3.2'
+__version__ = 'v1.3.3'
 
 # 配置常量
 CONFIG_FILE = 'config.json'
@@ -639,6 +639,11 @@ class QidianClient:
             
             result = self._make_qd_request(url, data=data, method='POST')
 
+            # 检测登录状态
+            if result.get("status", 200)==401 and result.get("error", "") == "Unauthorized":
+                logger.error("登录已失效，请重新登录或者抓取cookies")
+                return {"status": "Unauthorized", "msg": "登录已失效，请重新抓取cookies"}
+
             if result.get('Result') == -91002:
                 return {'status': 'success', 'msg': '今日已签到'}
             
@@ -692,6 +697,12 @@ class QidianClient:
         # 处理特殊结果
         if isinstance(result, dict) and result.get('status') == 'captcha':
             return result
+        
+        # 处理登录失效情况
+        if isinstance(result, dict):
+            if result.get("status", 200)==401 and result.get("error", "") == "Unauthorized":
+                logger.error("登录已失效，请重新登录或者抓取cookies")
+                return {"status": "Unauthorized", "msg": "登录已失效，请重新抓取cookies"}
 
         # 检查是否是成功的API响应
         if isinstance(result, dict) and result.get('Result') in (0, "0"):
@@ -790,6 +801,10 @@ class QidianClient:
         try:
             # 获取任务列表
             result = self.get_adv_job()
+            # 检测登录状态
+            if result.get("status", 200)==401 and result.get("error", "") == "Unauthorized":
+                logger.error("登录已失效，请重新登录或者抓取cookies")
+                return {"status": "Unauthorized", "msg": "登录已失效，请重新抓取cookies"}
             # task_list = result['Data']['VideoBenefitModule']['TaskList']
             task_list = result['Data']['DailyBenefitModule']['TaskList']
             
@@ -806,6 +821,9 @@ class QidianClient:
 
                     if result.get('status') == 'success':
                         time.sleep(random.randint(1, 2))
+                    elif result.get('status') == 'Unauthorized':
+                        logger.error("登录已失效，请重新登录或者抓取cookies")
+                        return {'status': 'Unauthorized', 'msg': '登录已失效，请重新抓取cookies'}
                     elif result.get('status') == 'captcha':
                         logger.warning("无法处理的验证码类型")
                         return {'status': result.get('status', 'captcha'), 'result': result, 'msg': '无法处理的验证码类型'}
@@ -818,6 +836,10 @@ class QidianClient:
             
             # 验证任务是否全部完成
             check_result = self.get_adv_job()
+            # 检测登录状态
+            if result.get("status", 200)==401 and result.get("error", "") == "Unauthorized":
+                logger.error("登录已失效，请重新登录或者抓取cookies")
+                return {"status": "Unauthorized", "msg": "登录已失效，请重新抓取cookies"}
             check_task_list = check_result['Data']['DailyBenefitModule']['TaskList']
             all_finished = all(task["IsFinished"] for task in check_task_list)
             
@@ -837,6 +859,10 @@ class QidianClient:
         try:
             # 获取任务列表
             result = self.get_adv_job()
+            # 检测登录状态
+            if result.get("status", 200)==401 and result.get("error", "") == "Unauthorized":
+                logger.error("登录已失效，请重新登录或者抓取cookies")
+                return {"status": "Unauthorized", "msg": "登录已失效，请重新抓取cookies"}
             # task_list = result['Data']['CountdownBenefitModule']['TaskList']
             task_list = result['Data']['VideoRewardTab']['TaskList']
             
@@ -851,6 +877,9 @@ class QidianClient:
                         
                         if task_result.get('status') == 'success':
                             time.sleep(random.randint(1, 2))
+                        elif result.get('status') == 'Unauthorized':
+                            logger.error("登录已失效，请重新登录或者抓取cookies")
+                            return {'status': 'Unauthorized', 'msg': '登录已失效，请重新抓取cookies'}
                         elif result.get('status') == 'captcha':
                             logger.warning("无法处理的验证码类型")
                             return {'status': result.get('status', 'captcha'), 'result': result, 'msg': '无法处理的验证码类型'}
@@ -863,6 +892,10 @@ class QidianClient:
                 
             # 检查任务状态
             check_result = self.get_adv_job()
+            # 检测登录状态
+            if result.get("status", 200)==401 and result.get("error", "") == "Unauthorized":
+                logger.error("登录已失效，请重新登录或者抓取cookies")
+                return {"status": "Unauthorized", "msg": "登录已失效，请重新抓取cookies"}
             check_task_list = check_result['Data']['VideoRewardTab']['TaskList']
             
             for task in check_task_list:
@@ -910,6 +943,10 @@ class QidianClient:
         try: 
             # 获取任务列表
             result = self.get_adv_job()
+            # 检测登录状态
+            if result.get("status", 200)==401 and result.get("error", "") == "Unauthorized":
+                logger.error("登录已失效，请重新登录或者抓取cookies")
+                return {"status": "Unauthorized", "msg": "登录已失效，请重新抓取cookies"}
             task_list = result['Data']['MoreRewardTab']['TaskList']
             game_url = ''
             type_gamejob = 0
@@ -1096,6 +1133,10 @@ class QidianClient:
         try:
             url = "https://h5.if.qidian.com/argus/api/v2/checkin/detail"
             result = self._make_sdk_request(url, method='GET')
+            # 检测登录状态
+            if result.get("status", 200)==401 and result.get("error", "") == "Unauthorized":
+                logger.error("登录已失效，请重新登录或者抓取cookies")
+                return {"status": "Unauthorized", "msg": "登录已失效，请重新抓取cookies"}
             
             video_chance = result['Data']['LotteryInfo']['HasVideoUrge']
             lottery_chance = result['Data']['LotteryInfo']['LotteryCount']
@@ -1122,6 +1163,11 @@ class QidianClient:
                 }
                 
                 video_result = self._make_sdk_request(url_video, data=data_video, method='POST')
+
+                # 检测登录状态
+                if video_result.get("status", 200)==401 and video_result.get("error", "") == "Unauthorized":
+                    logger.error("登录已失效，请重新登录或者抓取cookies")
+                    return {"status": "Unauthorized", "msg": "登录已失效，请重新抓取cookies"}
 
                 # 明确处理可能的验证码情况（虽然理论上不应该发生）
                 if video_result.get('is_captcha'):
@@ -1151,6 +1197,11 @@ class QidianClient:
             total_chance = lottery_chance + video_chance
             for i in range(total_chance):
                 lottery_result = self._make_sdk_request(url_lottery, data=data_lottery, method='POST')
+
+                # 检测登录状态
+                if lottery_result.get("status", 200)==401 and lottery_result.get("error", "") == "Unauthorized":
+                    logger.error("登录已失效，请重新登录或者抓取cookies")
+                    return {"status": "Unauthorized", "msg": "登录已失效，请重新抓取cookies"}
                 
                 if lottery_result.get('is_captcha'):
                     return {'status': 'captcha', 'captcha_data': lottery_result['captcha_data'], 'msg': '意外的验证码'}
@@ -1182,6 +1233,10 @@ class QidianClient:
         try:
             url_exchange_page = "https://h5.if.qidian.com/argus/api/v3/checkin/checkinexchangepage"
             result = self._make_sdk_request(url_exchange_page, method='GET')
+            # 检测登录状态
+            if result.get("status", 200)==401 and result.get("error", "") == "Unauthorized":
+                logger.error("登录已失效，请重新登录或者抓取cookies")
+                return {"status": "Unauthorized", "msg": "登录已失效，请重新抓取cookies"}
             if result.get('Result') != 0 and result.get('Result') != "0":
                 logger.error("获取章节卡兑换页面失败")
                 return {'status': 'failed', 'code': 10086, 'msg': '获取章节卡兑换页面失败'}
@@ -1443,6 +1498,10 @@ class TaskProcessor:
                         logger.info(f"任务[{task_name}]执行完成: {msg}")
                         self.task_results[task_name] = result
                         break
+                    elif status == "Unauthorized":
+                        logger.error(f"任务[{task_name}]因未登录强行停止所有任务: {msg}")
+                        self.task_results[task_name] = result
+                        return False
                     elif status == 'captcha_failed':
                         captcha_data = result.get('captcha_data', {})
                         logger.error(f"任务[{task_name}]因验证码失败: {msg}")
@@ -1484,6 +1543,7 @@ class TaskProcessor:
                         'error': str(e),
                         'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
                     }
+        return True
     
     def process_all_tasks(self) -> Dict[str, Any]:
         """处理所有任务"""
@@ -1511,7 +1571,9 @@ class TaskProcessor:
         tasks.append(('章节卡信息推送', self.client.get_readcard_status))
         
         for task_name, task_func in tasks:
-            self.run_task(task_name, task_func)
+            flag = self.run_task(task_name, task_func)
+            if not flag:
+                break
         
         return self.task_results
 
@@ -1589,12 +1651,6 @@ class MainApp:
                 # 处理任务
                 processor = TaskProcessor(client, user, retry_attempts)
                 results = processor.process_all_tasks()
-
-                # 检测验证码并处理
-                for task_name, result in results.items():
-                    if isinstance(result, dict) and result.get('status') == 'captcha':
-                        self.handle_captcha(user, result.get('captcha_data', {}))
-                        break  # 遇到验证码后停止后续任务
                 
                 # 发送通知
                 self._send_notification(user, results)
