@@ -11,7 +11,7 @@ from push import *
 from logger import LoggerManager
 from logger import DEFAULT_LOG_RETENTION
 
-__version__ = 'v1.3.3'
+__version__ = 'v1.3.4'
 
 # 配置常量
 CONFIG_FILE = 'config.json'
@@ -390,6 +390,7 @@ class QidianClient:
         QDSign = getQDSign(ts, data_encrypt, self.version, self.qid, userid=self.userid)
         QDInfo = getQDInfo_byQDInfo(ts, self.QDInfo)
         borgus = getborgus(ts, data_encrypt, self.versioncode, self.qid)
+        ibex = getibex_byibex(ts, self.ibex)
         
         # 更新headers
         headers = self.headers_qd.copy()
@@ -397,6 +398,7 @@ class QidianClient:
             'tstamp': ts,
             'QDInfo': QDInfo,
             'QDSign': QDSign,
+            'ibex': ibex,
             'borgus': borgus
         })
 
