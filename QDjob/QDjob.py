@@ -11,7 +11,7 @@ from push import *
 from logger import LoggerManager
 from logger import DEFAULT_LOG_RETENTION
 
-__version__ = 'v1.3.4'
+__version__ = 'v1.3.5'
 
 # 配置常量
 CONFIG_FILE = 'config.json'
@@ -1484,7 +1484,7 @@ class TaskProcessor:
         """运行单个任务"""
         if not self.user.tasks.get(task_name, False):
             logger.info(f"任务[{task_name}]已禁用，跳过执行")
-            return
+            return True
             
         logger.info(f"开始执行任务: {task_name}")
         for attempt in range(1, self.retry_attempts + 1):

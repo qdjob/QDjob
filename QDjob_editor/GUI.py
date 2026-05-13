@@ -12,7 +12,7 @@ import sys, random
 import os
 import platform
 
-__version__ = 'v1.3.3'
+__version__ = 'v1.3.5'
 
 system = platform.system()
 if system == "Windows":
