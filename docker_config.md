@@ -47,6 +47,26 @@ docker run -d \
 
 > **注意**：`/your/data/path/QDjob` 需替换为您实际创建的目录路径
 
+### 5. 后续Docker镜像的更新和容器更新
+1. 拉取更新后的 Docker 镜像：
+```bash
+docker pull janiquiz/qdjob:latest
+```
+2. 更新容器：
+停止并删除旧容器
+```bash
+docker stop qdjob && docker rm qdjob
+```
+创建并启动新容器(原本配置好的用户数据会保留)
+```bash
+docker run -d \
+  --name qdjob \
+  --restart unless-stopped \
+  -v /your/data/path/QDjob:/app \
+  -e TZ=Asia/Shanghai \
+  janiquiz/qdjob:latest
+```
+
 ## 📋 Docker Compose 部署
 
 ### 1. 创建目录结构
@@ -81,6 +101,17 @@ services:
 ```bash
 # 在 docker-compose.yml 所在目录执行
 docker-compose up -d
+```
+
+### 5. 后续Docker镜像的更新和容器更新
+1. 拉取更新后的 Docker 镜像：
+到docker-compose.yml所在目录执行
+```bash
+docker compose pull
+```
+2. 更新容器：
+```bash
+docker compose up -d
 ```
 
 ## 🖥️ 宝塔面板部署指南
