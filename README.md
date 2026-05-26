@@ -66,7 +66,9 @@
 [常见错误与解决方案](error_resolution.md)
 
  * 程序本体**免费使用**，仅自动过图形验证码功能需要获取tokenid(验证码指任务执行过程中的图形验证码，并非登录用到的手机验证码)  
- * 如何获取tokenid: [我的网站](https://shop.janiquiz.dpdns.org)
+ * 如何获取tokenid: 
+    - [闲鱼](https://m.tb.cn/h.RVenEOo?tk=4w0t5DTE1br)(推荐)
+    - [我的网站](https://shop.janiquiz.dpdns.org)(发货较慢)
  * 售后问题请进入下方的TG群组或者邮箱联系
 
 ### 配置日常运行  
