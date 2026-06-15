@@ -11,7 +11,7 @@ from push import *
 from logger import LoggerManager
 from logger import DEFAULT_LOG_RETENTION
 
-__version__ = 'v1.3.5'
+__version__ = 'v1.3.6'
 
 # 配置常量
 CONFIG_FILE = 'config.json'
@@ -475,44 +475,81 @@ class QidianClient:
         
         # 检查CaptchaAId是否支持
         captcha_a_id = captcha_data.get('CaptchaAId', '')
-        if captcha_a_id != "198420051":
-            logger.error(f"未实现的验证码类型: {captcha_a_id}，当前仅支持198420051")
-            return False
         
-        try:
-            logger.info("开始进行验证码处理")
-            from Captcha import main
-            # 使用无头模式，避免干扰用户
-            captcha_result = main(tokenid=self.tokenid, captcha_a_id=captcha_a_id, user_agent=self.config.user_agent)
-            logger.debug(f"验证码识别结果: {captcha_result}")
-            # 验证结果格式
-            if not isinstance(captcha_result, dict) or 'code' not in captcha_result:
-                logger.error("验证码识别返回格式错误")
-                return None
+        if captcha_a_id == "198420051":
+            try:
+                logger.info("开始进行验证码处理")
+                from Captcha import main
+                # 使用无头模式，避免干扰用户
+                captcha_result = main(tokenid=self.tokenid, captcha_a_id=captcha_a_id, user_agent=self.config.user_agent)
+                logger.debug(f"验证码识别结果: {captcha_result}")
+                # 验证结果格式
+                if not isinstance(captcha_result, dict) or 'code' not in captcha_result:
+                    logger.error("验证码识别返回格式错误")
+                    return None
+                    
+                if captcha_result.get('code') == 0:
+                    logger.info(f"验证码识别成功: randstr={captcha_result['randstr']}, ticket={captcha_result['ticket'][:10]}...")
+                    return captcha_result
                 
-            if captcha_result.get('code') == 0:
-                logger.info(f"验证码识别成功: randstr={captcha_result['randstr']}, ticket={captcha_result['ticket'][:10]}...")
-                return captcha_result
-            
-            elif captcha_result.get('code') == 12:
-                logger.error(f"验证码识别失败: {captcha_result['message']}")
+                elif captcha_result.get('code') == 12:
+                    logger.error(f"验证码识别失败: {captcha_result['message']}")
+                    return None
+                
+                elif captcha_result.get('code') == 50:
+                    logger.error(f"验证码识别失败: {captcha_result['message']}")
+                    return None
+                
+                elif captcha_result.get('code') == 666:
+                    logger.error(f"验证码识别失败: {captcha_result['message']}")
+                    return None
+                
+                else:
+                    logger.error(f"未知返回：{captcha_result}")
+                    return None
+                
+            except Exception as e:
+                logger.exception(f"验证码处理异常: {e}")
                 return None
-            
-            elif captcha_result.get('code') == 50:
-                logger.error(f"验证码识别失败: {captcha_result['message']}")
+        
+        elif captcha_a_id == "1600000770":
+            try:
+                logger.info("开始进行验证码处理")
+                from Captcha import main_slider
+                # 使用无头模式，避免干扰用户
+                captcha_result = main_slider(tokenid=self.tokenid, captcha_a_id=captcha_a_id, user_agent=self.config.user_agent)
+                logger.debug(f"验证码识别结果: {captcha_result}")
+                # 验证结果格式
+                if not isinstance(captcha_result, dict) or 'code' not in captcha_result:
+                    logger.error("验证码识别返回格式错误")
+                    return None
+                    
+                if captcha_result.get('code') == 0:
+                    logger.info(f"验证码识别成功: randstr={captcha_result['randstr']}, ticket={captcha_result['ticket'][:10]}...")
+                    return captcha_result
+                
+                elif captcha_result.get('code') == 12:
+                    logger.error(f"验证码识别失败: {captcha_result['message']}")
+                    return None
+                
+                elif captcha_result.get('code') == 50:
+                    logger.error(f"验证码识别失败: {captcha_result['message']}")
+                    return None
+                
+                elif captcha_result.get('code') == 666:
+                    logger.error(f"验证码识别失败: {captcha_result['message']}")
+                    return None
+                
+                else:
+                    logger.error(f"未知返回：{captcha_result}")
+                    return None
+                
+            except Exception as e:
+                logger.exception(f"验证码处理异常: {e}")
                 return None
-            
-            elif captcha_result.get('code') == 666:
-                logger.error(f"验证码识别失败: {captcha_result['message']}")
-                return None
-            
-            else:
-                logger.error(f"未知返回：{captcha_result}")
-                return None
-            
-        except Exception as e:
-            logger.exception(f"验证码处理异常: {e}")
-            return None
+        else:
+            logger.error(f"未实现的验证码类型: {captcha_a_id}，当前仅支持198420051(点选)和1600000770(滑块)")
+            return False
 
     def _make_request_with_captcha(self, url: str, data: dict, method: str = 'POST', max_captcha_attempts: int = 3) -> dict:
         """
