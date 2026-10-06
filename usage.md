@@ -44,7 +44,7 @@
     ```bash
     Mozilla/5.0 (Linux; Android 13; PDEM10 Build/TP1A.220905.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/109.0.5414.86 MQQBrowser/6.2 TBS/047601 Mobile Safari/537.36 QDJSSDK/1.0  QDNightStyle_1  QDReaderAndroid/7.9.384/1466/1000032/OPPO/QDShowNativeLoading
     ```
-    - ibex(必填)： 记录设备安全信息，是一段base64编码的数据，较长。
+    - ibex(必填)：记录设备安全信息，内容较长（由抓包得到的字符串）。
     - cookies(必填)：记录账号登录信息，格式应当为json类型，下方示例中的11项为必须包含字段。本软件提供了字符串格式`cookies`的转换功能，可以将形如`a=b;c=d;...`的字符串转换成json类型，如果抓取到的格式并非json类型，需要进行转换后再进行保存。
    ```json
    {
@@ -139,6 +139,14 @@
 3. 解析会得到 `brand / model / board / cpu_abi / device_name / android_version / build_id / qid / phone_security`，以及 `ibex` 设备指纹
 4. 填写自定义设备名称后保存；**保存时会一并记录解析到的软件版本**
 5. 之后在用户详情「登录 → 登录设备」选择该设备，软件版本会**自动选中**（若不在版本表中会自动新增），再走登录即可
+6. **（可选，次要方式）从 HAR 一键导入**：若抓包工具支持直接导出 `.har` 文件，可在网页版「用户管理」页点「📥 从 HAR 导入」，
+   选择该文件即可**自动识别起点昵称**，并一次完成「新建 / 更新用户 + 保存账号凭据 + 写入设备档案 + 登记版本表」；
+   推荐仍优先使用上面的 curl 导入方式。
+
+> 网页版「用户详情 → 登录」页的折叠区「**① 从抓包 curl 快速填入（推荐）**」支持直接粘贴整段 `curl`，
+> 自动填入 User-Agent / ibex / Cookies（**只填表单、不直接保存**），可反复粘贴不同请求逐步补充；
+> 在设备弹窗里解析 curl 时若同时提取到账号凭据，也会提示你到这里补充。
+
 *注：真实设备需要是你已经登陆过的并且没有风险的设备*
 
 软件版本表（与设备无关）位置：

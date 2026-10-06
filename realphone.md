@@ -53,3 +53,12 @@
    <img src="./picture/realphone_9.jpg" alt="picture_9" style="zoom:33%;" />
 
    <img src="./picture/realphone_10.jpg" alt="realphone_10" style="zoom:33%;" />
+
+10. 把抓到的内容填进网页版：
+
+    - **推荐**：打开「真实设备 → 添加设备」，把 curl 粘贴到「**① 从抓包 curl 导入（推荐）**」并点「解析并填入」，
+      会自动识别设备指纹与 ibex；补全分辨率等信息、填写设备名称后保存即可。
+    - 同一条 curl 里若带有账号凭据，还可以粘贴到用户详情「**登录 → ① 从抓包 curl 快速填入**」，
+      把 User-Agent / ibex / Cookies 一并填入（可反复粘贴不同请求逐步补充，确认后再保存）。
+    - 若抓包工具支持直接导出 `.har` 文件，也可以在「用户管理」页点「📥 从 HAR 导入」一键完成建号与导入
+      （**推荐仍优先使用上面的 curl 方式**）。
