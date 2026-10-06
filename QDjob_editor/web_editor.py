@@ -733,6 +733,12 @@ def _register_api(app, password_required, verify_password):
         ok, message, result = device_manager.parse_fields(fields)
         return resp({"ok": ok, "message": message, "data": result})
 
+    @app.route("/api/devices/parse-har", methods=["POST"])
+    def api_devices_parse_har():
+        data = body()
+        ok, message, result = device_manager.parse_har(data.get("text", ""))
+        return resp({"ok": ok, "message": message, "data": result})
+
     @app.route("/api/devices/compose", methods=["POST"])
     def api_devices_compose():
         data = body()

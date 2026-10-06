@@ -115,7 +115,7 @@ function openDeviceModal(rec) {
       field('d-sdk', 'sdkversion（可选）', ver.sdkversion || '401', '401') +
     '</div>' +
     '<details class="advanced" open><summary>① 从抓包 curl 导入（推荐）</summary>' +
-      '<p class="help muted mt-8">粘贴真机登录抓包的 curl（手机验证码登录或账号密码登录均可，二者设备参数相同），点击解析自动填入下方字段。</p>' +
+      '<p class="help muted mt-8">粘贴真机登录抓包的 curl（手机验证码登录或账号密码登录均可，二者设备参数相同），点击解析自动填入下方字段。支持反复粘贴不同请求逐步补充。</p>' +
       '<div class="field"><textarea id="d-curl" rows="4" placeholder="curl -X POST ..."></textarea></div>' +
       '<div class="btn-row"><button class="btn" id="d-parse">解析并填入</button></div>' +
       '<p class="help mt-8" id="d-warn"></p>' +
@@ -182,14 +182,6 @@ function openDeviceModal(rec) {
       UI.escapeHtml(msg) + '</span>';
   }
 
-  UI.qs('#d-parse').onclick = async function () {
-    const text = UI.qs('#d-curl').value.trim();
-    if (!text) { UI.toast('请先粘贴 curl', 'warn'); return; }
-    const r = await UI.api('POST', '/api/devices/parse', { text: text });
-    if (!r.ok) return;
-    applyParsed(r, '#d-warn');
-  };
-
   UI.qs('#f-parse').onclick = async function () {
     const fields = {
       ibex: UI.qs('#f-ibex').value.trim(),
@@ -204,6 +196,33 @@ function openDeviceModal(rec) {
     const r = await UI.api('POST', '/api/devices/parse-fields', { fields: fields });
     if (!r.ok) return;
     applyParsed(r, '#f-warn');
+  };
+
+  // 导入来源：保存设备档案时记录 provenance
+  let parsedSource = '';
+
+  // 除设备字段外，还提取到了哪些可复用的账号凭据
+  function showCredentialHint(r, warnId) {
+    const d = r.data || {};
+    const extra = [];
+    if (d.user_agent) extra.push('User-Agent');
+    if (d.ibex) extra.push('ibex');
+    const cookieCount = Object.keys(d.cookies || {}).length;
+    if (cookieCount) extra.push('Cookies（' + cookieCount + ' 项）');
+    if (extra.length) {
+      UI.qs(warnId).innerHTML += '<br><span class="tag info">同时提取到 ' +
+        UI.escapeHtml(extra.join('、')) + '，可把同一 curl 粘贴到用户详情页「登录」处填入账号凭据。</span>';
+    }
+  }
+
+  UI.qs('#d-parse').onclick = async function () {
+    const text = UI.qs('#d-curl').value.trim();
+    if (!text) { UI.toast('请先粘贴 curl', 'warn'); return; }
+    const r = await UI.api('POST', '/api/devices/parse', { text: text });
+    if (!r.ok) return;
+    parsedSource = 'curl';
+    applyParsed(r, '#d-warn');
+    showCredentialHint(r, '#d-warn');
   };
 
   UI.qs('#d-save').onclick = async function () {
@@ -235,7 +254,7 @@ function openDeviceModal(rec) {
       note: UI.qs('#d-note').value.trim(),
       device: device,
       version: version,
-      source: rec ? (rec.source || 'manual') : 'manual',
+      source: parsedSource || (rec ? (rec.source || 'manual') : 'manual'),
     });
     if (r.ok) {
       UI.closeModal();

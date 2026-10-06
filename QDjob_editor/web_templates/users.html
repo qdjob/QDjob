@@ -7,7 +7,11 @@
     <h1 class="page-title">用户管理</h1>
     <p class="page-desc">最多支持 {{ 3 }} 个用户。点击用户进入详情配置登录、任务、推送与阅读上报。</p>
   </div>
-  <button class="btn primary" id="add-user">+ 添加用户</button>
+  <div class="row">
+    <input type="file" id="har-file" accept=".har,application/json" hidden>
+    <button class="btn" id="har-import">从 HAR 导入</button>
+    <button class="btn primary" id="add-user">+ 添加用户</button>
+  </div>
 </div>
 
 <div class="card">
@@ -157,6 +161,122 @@ UI.qs('#add-user').addEventListener('click', function () {
     if (res.ok) { UI.closeModal(); UI.toast('用户创建成功', 'ok'); loadUsers(); }
   };
 });
+
+// ============ 从 HAR 一键导入（唯一 HAR 入口）============
+// 自动识别起点昵称：同名用户不存在则新建、存在则更新；
+// 连带保存账号凭据、设备档案与软件版本。
+const HAR_NICK_RE = /^[\u4e00-\u9fa5A-Za-z0-9_]{2,20}$/;
+
+UI.qs('#har-import').addEventListener('click', function () { UI.qs('#har-file').click(); });
+UI.qs('#har-file').addEventListener('change', async function () {
+  const input = this;
+  const file = input.files && input.files[0];
+  input.value = '';
+  if (!file) return;
+  UI.status('#page-status', 'info', 'HAR 解析中…');
+  const text = await new Promise(function (resolve, reject) {
+    const reader = new FileReader();
+    reader.onload = function () { resolve(String(reader.result || '')); };
+    reader.onerror = function () { reject(new Error('读取文件失败')); };
+    reader.readAsText(file);
+  });
+  let r = null;
+  try { r = await UI.api('POST', '/api/devices/parse-har', { text: text }); } catch (e) { /* 已 toast */ }
+  if (!r || !r.ok) { UI.clearStatus('#page-status'); return; }
+  const d = r.data || {};
+  const cookies = d.cookies || {};
+  const cookieCount = Object.keys(cookies).length;
+  const av = d.app_version || {};
+  const canSaveCred = !!(d.user_agent && d.ibex);
+  const devName = ((d.device.brand || '') + ' ' + (d.device.model || '')).trim();
+
+  // 目标用户：昵称命中已有用户 → 更新；否则新建（未识别到昵称时弹窗指定）
+  const listRes = await UI.api('GET', '/api/users', undefined, { silent: true });
+  const names = (listRes.ok && listRes.data.users || []).map(function (u) { return u.username; });
+  let target = '';
+  let mode = '';  // create | update
+  if (d.nickname && HAR_NICK_RE.test(d.nickname)) {
+    target = d.nickname;
+    mode = names.indexOf(d.nickname) >= 0 ? 'update' : 'create';
+  } else {
+    const picked = await promptImportUsername(names);
+    if (!picked) { UI.clearStatus('#page-status'); return; }
+    target = picked.name;
+    mode = picked.exists ? 'update' : 'create';
+  }
+
+  const items = [(mode === 'create' ? '新建用户' : '更新用户') + '「' + target + '」'];
+  if (canSaveCred) items.push('账号凭据（UA + ibex + Cookies ' + cookieCount + ' 项）');
+  else items.push('账号凭据无法自动保存（' + (!d.user_agent ? '缺 User-Agent ' : '') + (!d.ibex ? '缺 ibex' : '') + '），可稍后在用户详情页用 curl 补充');
+  if (devName) items.push('设备档案「' + devName + '」');
+  if (av.versioncode) items.push('软件版本 ' + (av.version || '?') + '（' + av.versioncode + '）');
+  if (!await UI.confirmDialog('将从该 HAR 导入：' + items.join('；') + '。是否继续？', 'HAR 一键导入')) {
+    UI.clearStatus('#page-status');
+    return;
+  }
+
+  const done = [], failed = [];
+  if (mode === 'create') {
+    const s = await UI.api('POST', '/api/users', { username: target }, { silent: true });
+    if (!s.ok) {
+      UI.status('#page-status', 'err', '创建用户失败', UI.escapeHtml(s.message || ''));
+      UI.toast(s.message || '创建用户失败', 'err');
+      return;
+    }
+    done.push('用户「' + target + '」');
+  }
+  if (canSaveCred) {
+    const s = await UI.api('POST', '/api/login/manual', {
+      username: target, user_agent: d.user_agent, ibex: d.ibex, cookies: cookies,
+    }, { silent: true });
+    if (s.ok) done.push('账号凭据'); else failed.push('账号凭据（' + (s.message || '失败') + '）');
+  }
+  if (devName) {
+    const s = await UI.api('POST', '/api/devices', {
+      name: devName, note: '来自 HAR 导入', device: d.device,
+      version: av.versioncode ? { version: av.version || '', versioncode: av.versioncode, sdkversion: av.sdkversion || '401' } : null,
+      source: 'har',
+    }, { silent: true });
+    if (s.ok) done.push('设备档案「' + devName + '」'); else failed.push('设备档案（' + (s.message || '失败') + '）');
+  }
+  if (av.versioncode) {
+    const s = await UI.api('PUT', '/api/versions', {
+      version: av.version || '', versioncode: av.versioncode, sdkversion: av.sdkversion || '401',
+    }, { silent: true });
+    if (s.ok) done.push('版本表'); else failed.push('版本表');
+  }
+  const warns = d.warnings || [];
+  const okState = failed.length ? 'warn' : 'ok';
+  UI.status('#page-status', okState,
+    done.length ? 'HAR 导入完成：' + UI.escapeHtml(done.join('、')) : 'HAR 导入未完成',
+    (failed.length ? '失败：' + UI.escapeHtml(failed.join('、')) + '。' : '') +
+    (warns.length ? ' 提示：' + UI.escapeHtml(warns.join('；')) : ''));
+  UI.toast(done.length ? 'HAR 导入完成' : 'HAR 导入未完成', okState);
+  loadUsers();
+  // 新建的用户跳到详情页，可直接检测登录状态
+  if (mode === 'create') {
+    setTimeout(function () { window.location.href = '/users/' + encodeURIComponent(target); }, 1200);
+  }
+});
+
+// 未识别到昵称时：手动指定导入目标（已有名字 = 更新，新名字 = 新建）
+function promptImportUsername(names) {
+  return new Promise(function (resolve) {
+    UI.openModal(
+      '<h3>指定导入用户</h3>' +
+      '<p class="help muted">未在 HAR 中识别到起点昵称。输入用户名：已存在的名字将更新该用户，新名字将新建用户。</p>' +
+      '<div class="field"><label>用户名</label><input type="text" id="hu-username" placeholder="2-20位，中文/字母/数字/下划线"></div>' +
+      '<div class="modal-actions"><button class="btn" id="hu-cancel">取消</button><button class="btn primary" id="hu-ok">确定</button></div>'
+    );
+    UI.qs('#hu-cancel').onclick = function () { UI.closeModal(); resolve(null); };
+    UI.qs('#hu-ok').onclick = function () {
+      const name = UI.qs('#hu-username').value.trim();
+      if (!HAR_NICK_RE.test(name)) { UI.toast('用户名格式：2-20位，中文/字母/数字/下划线', 'warn'); return; }
+      UI.closeModal();
+      resolve({ name: name, exists: names.indexOf(name) >= 0 });
+    };
+  });
+}
 
 loadUsers();
 </script>
