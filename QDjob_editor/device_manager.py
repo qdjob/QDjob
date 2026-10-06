@@ -3,7 +3,7 @@
 
 - 设备档案保存在工作目录 `devices.json`，可添加多组、自定义命名
 - 设备信息与软件版本分离：设备只存硬件/指纹，版本另存 `versions.json`
-- 支持从抓包 curl / HAR 文件解析设备参数（解析 ibex 得到真实设备指纹）
+- 支持从抓包 curl 解析设备参数（解析 ibex 得到真实设备指纹）
 - 登录时由 `compose_login_phone()` 把「设备 + 版本」合成为 Login 所需的字典
 
 设备字段说明（对应 Login.init_device_info）：
@@ -12,7 +12,7 @@
     resolution {width,height}                        -> 分辨率
     qid / qidth                                      -> 设备ID
     phone_security / phone_security_over             -> 设备指纹(qid_36 / qid_36_over)
-    ibex_plain                                       -> ibex 明文模板（{TS} 为时间戳占位）
+    ibex_plain                                       -> ibex 明文模板（{TS} 时间戳 / {VER} 版本号占位）
     android_id / jpush_id                            -> 可选
 """
 
@@ -186,9 +186,6 @@ def normalize_version(entry):
 _PAIR_RE = re.compile(r"""['"]([A-Za-z0-9_\-]+)=([^'"]*)['"]""", re.S)
 _OSVER_RE = re.compile(r'Android(\d+)_([\d.]+)_(\d+)')
 _WS_RE = re.compile(r'\s+')
-# ibex 明文中的 cpu_abi 特征段（如 arm64-v8a / armeabi-v7a / x86_64）
-_CPUABI_RE = re.compile(r'^(?:arme?abi|arm64|x86_64|x86|mips64|mips)(?:[-_v0-9a-z]+)?$', re.I)
-_QID_RE = re.compile(r'^[0-9a-fA-F]{16,}$')
 
 
 def _extract_pairs(text):
@@ -258,57 +255,115 @@ def _collect_data_text(pairs, data):
         _collect_param(pairs, k, v)
 
 
-def parse_ibex_plain(plain):
-    """从 ibex 明文提取设备字段，并生成带 {TS} 占位符的模板。
+PKG_SUFFIX = "com.qidian.QDReader"
+_TS13_RE = re.compile(r"\d{13}")
+_TS_RE = re.compile(r"\d{8,}")
+_VER_FIELD_RE = re.compile(r"^\d+\.\d+(\.\d+)?$")
+_VER_FIELD3_RE = re.compile(r"^\d+\.\d+\.\d+$")
+# cpu_abi 取值（用于特征段锚定）
+_CPUABI_RE = re.compile(r"^(?:arm64-v8a|armeabi-v7a|armeabi|x86_64|x86|arm64|riscv64|mips64?)$")
+# qid / qidth：至少 16 位十六进制
+_QID_RE = re.compile(r"^[0-9a-fA-F]{16,}$")
 
-    兼容新版明文在末尾追加字段的情况：设备块相对位置不变（cpu_abi 之后隔
-    2 段是 qid、再往后是 qidth），因此优先以 cpu_abi 特征段锚定设备块；
-    锚定失败（特征缺失或 qid/qidth 校验不过）时回退旧的固定位置解析。
+
+def _ibex_cpu_abi_index(parts):
+    """
+    定位 cpu_abi 字段索引，返回 (abi_index, strategy, pkg_index)。
+
+    ibex 明文中 cpu_abi 之后的相对位置是稳定的：
+        [abi-5] model  [abi-4] brand  [abi-3] board
+        [abi-1] build_id  [abi+3] qid  [abi+4] qidth
+    因此只要定位到 cpu_abi，就不受「末尾追加字段」影响。
+
+    策略优先级：
+        ① 包名 `com.qidian.QDReader` 锚定（cpu_abi 在其前第 6 段）——
+           可同时容忍前后任意位置追加字段，是首选；
+        ② cpu_abi 特征段 + qid/qidth 十六进制双重校验 —— 包名缺失或位置变动时使用；
+        ③ 旧版固定尾部布局（cpu_abi 在倒数第 7 段）—— 最后兜底，行为与旧版一致。
+    """
+    n = len(parts)
+
+    # ① 包名锚点
+    for i, p in enumerate(parts):
+        if (p or "").strip() == PKG_SUFFIX:
+            a = i - 6
+            if a >= 6 and (parts[a] or "").strip() and len(parts[a + 3] or "") >= 16:
+                return a, "pkg", i
+            break
+
+    # ② cpu_abi 特征 + qid/qidth 校验（从右往左，优先靠近末尾的匹配）
+    for i in range(n - 5, 5, -1):
+        if (_CPUABI_RE.match(parts[i] or "")
+                and _QID_RE.match(parts[i + 3] or "")
+                and _QID_RE.match(parts[i + 4] or "")):
+            return i, "cpuabi", None
+
+    # ③ 旧版固定尾部布局
+    a = n - 7
+    if a >= 6:
+        return a, "tail", None
+    return None, "none", None
+
+
+def parse_ibex_plain(plain):
+    """
+    从 ibex 明文提取设备字段，并生成带 {TS}/{VER} 占位符的模板。
+
+    兼容性说明：
+    - 首位标记可能是 `1`/`2`/`5` 等，不再强制为 1；
+    - 旧版字段较少、新版会在**末尾追加**若干字段（额外哈希、软件版本号等），
+      因此定位 cpu_abi 后按相对偏移解析，而不是从末尾倒数；
+    - 包名缺失时以 cpu_abi 特征段 + qid/qidth 校验兜底，再退到旧版尾部布局。
     """
     out = {}
-    if not isinstance(plain, str) or not plain.startswith("1|"):
+    if not isinstance(plain, str) or "|" not in plain:
         return out
     parts = plain.split("|")
     if len(parts) < 16:
         return out
 
-    ts = parts[1][:13]
-    if ts.isdigit():
-        # 把时间戳替换为占位符，保证登录时逐字节还原
-        out["ibex_plain"] = plain[:2] + "{TS}" + plain[2 + 13:]
-
-    # 以 cpu_abi 特征段锚定：model 在其前 5 段，qid/qidth 在其后 3/4 段
-    anchor = None
-    for i in range(len(parts) - 1, 6, -1):
-        if (_CPUABI_RE.match(parts[i]) and i + 4 < len(parts)
-                and _QID_RE.match(parts[i + 3]) and _QID_RE.match(parts[i + 4])):
-            anchor = i
-            break
-
-    if anchor is not None:
-        model_i = anchor - 5
-        out["model"] = re.split(r"\s*\(", parts[model_i], 1)[0].strip()
-        out["brand"] = parts[anchor - 4]
-        out["board"] = parts[anchor - 3]
-        out["build_id"] = parts[anchor - 1]
-        out["cpu_abi"] = parts[anchor]
-        out["qid"] = parts[anchor + 3]
-        out["qidth"] = parts[anchor + 4]
-        # model 之前的中段即设备指纹 phone_security（97 字符 / 46 段）
-        ps = "|".join([parts[1][13:]] + parts[2:model_i] + [""])
-        out["phone_security"] = ps
-        out["phone_security_over"] = ps
+    abi_idx, _strategy, pkg_idx = _ibex_cpu_abi_index(parts)
+    if abi_idx is None:
+        return out
+    model_idx = abi_idx - 5
+    if model_idx < 2:
         return out
 
-    # 回退：旧版固定位置（设备块紧贴明文末尾）
-    out["model"] = re.split(r"\s*\(", parts[-12], 1)[0].strip()
-    out["brand"] = parts[-11]
-    out["board"] = parts[-10]
-    out["build_id"] = parts[-8]
-    out["cpu_abi"] = parts[-7]
-    out["qid"] = parts[-4]
-    out["qidth"] = parts[-3]
-    ps = "|".join([parts[1][13:]] + parts[2:-12] + [""])
+    # 时间戳长度（毫秒时间戳为 13 位；优先精确匹配 13 位，避免贪婪越界）
+    ts13 = _TS13_RE.match(parts[1] or "")
+    if ts13:
+        ts_match = ts13
+        ts_len = 13
+    else:
+        ts_match = _TS_RE.match(parts[1] or "")
+        ts_len = len(ts_match.group(0)) if ts_match else 13
+
+    new_parts = list(parts)
+    # 时间戳 -> {TS} 占位（保留首位标记）
+    if ts_match:
+        new_parts[1] = "{TS}" + parts[1][ts_len:]
+    # 版本 -> {VER} 占位（登录时按所选版本填充）：仅在包名之后的「追加区」查找，
+    # 优先三段式版本号，兜底两段式；包名缺失时退回 cpu_abi 之后查找。
+    ver_start = (pkg_idx + 1) if pkg_idx is not None else (abi_idx + 1)
+    for pattern in (_VER_FIELD3_RE, _VER_FIELD_RE):
+        for i in range(ver_start, len(new_parts)):
+            if pattern.match(new_parts[i] or ""):
+                new_parts[i] = "{VER}"
+                break
+        else:
+            continue
+        break
+    out["ibex_plain"] = "|".join(new_parts)
+
+    out["model"] = re.split(r"\s*\(", parts[model_idx], 1)[0].strip()
+    out["brand"] = parts[abi_idx - 4]
+    out["board"] = parts[abi_idx - 3]
+    out["build_id"] = parts[abi_idx - 1]
+    out["cpu_abi"] = parts[abi_idx]
+    out["qid"] = parts[abi_idx + 3]
+    out["qidth"] = parts[abi_idx + 4]
+    # 中段即设备指纹 phone_security（46 段）
+    ps = "|".join([parts[1][ts_len:]] + parts[2:model_idx] + [""])
     out["phone_security"] = ps
     out["phone_security_over"] = ps
     return out
@@ -383,9 +438,10 @@ def _device_from_pairs(pairs):
 def parse_curl(text):
     """解析抓包 curl，返回 (ok, message, result)。
 
-    支持 bash / Windows cmd（^ 续行）两种风格与 -H / -A / -b / -d / --data* 等
-    常用参数；除设备参数外，同时提取可复用的 Cookies / User-Agent / 原始 ibex，
-    供「手动填写 Cookies」逐步粘贴导入。
+    支持 bash 与 Windows cmd（`^` 续行）两种风格，识别 `-H` 头部
+    （User-Agent / Cookie / ibex）、`-A`、`-b`、`-d` / `--data*`、URL query。
+    除设备参数外，同时提取可复用的 Cookies / User-Agent / 原始 ibex，
+    供用户详情页「登录」逐步粘贴导入。
     """
     empty = {"device": {}, "app_version": {}, "warnings": [], "found": [],
              "user_agent": "", "ibex": "", "cookies": {}, "nickname": ""}
@@ -474,7 +530,7 @@ HAR_PARAM_KEYS = ("ibex", "signature", "devicetype", "devicename", "osversion",
                   "version", "sdkversion")
 # 「手动填写 Cookies」依赖的关键 cookie，缺失时给出提示
 HAR_CRITICAL_COOKIES = ("qid", "QDInfo", "ywguid", "ywkey")
-# 判定"抓到了设备参数"的键（仅提取到 version/sdkversion 等版本参数不算）
+# 判定“抓到了设备参数”的键（仅提取到 version/sdkversion 等版本参数不算）
 _DEVICE_PARAM_KEYS = ("ibex", "signature", "devicetype", "devicename")
 # 起点昵称（来自 getaccountpage / getprofile / 登录等接口的响应体）
 _NICK_RE = re.compile(r'"(?:NickName|Nickname|nickName)"\s*:\s*"((?:[^"\\]|\\.)*)"')
@@ -584,9 +640,9 @@ def parse_har(text):
     if not isinstance(entries, list) or not entries:
         return False, "HAR 中没有请求记录（log.entries 为空）", empty
 
-    pairs = {}       # 抓包参数（ibex / devicetype / ...）
-    cookies = {}     # cookie 名 -> 值
-    ua_counts = {}   # user-agent -> 出现次数
+    pairs = {}        # 抓包参数（ibex / devicetype / ...）
+    cookies = {}      # cookie 名 -> 值
+    ua_counts = {}    # user-agent -> 出现次数
     nick_counts = {}  # 起点昵称 -> 出现次数
     matched = 0
     for entry in entries:
