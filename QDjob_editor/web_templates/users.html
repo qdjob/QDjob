@@ -6,10 +6,11 @@
   <div>
     <h1 class="page-title">用户管理</h1>
     <p class="page-desc">最多支持 {{ 3 }} 个用户。点击用户进入详情配置登录、任务、推送与阅读上报。</p>
+    <p class="help muted">推荐方式：在「真实设备」页用抓包 <code>curl</code> 导入设备指纹，登录凭据在用户详情页用 curl 补充。已有完整 HAR 抓包文件时，也可一键导入快速建号。</p>
   </div>
   <div class="row">
     <input type="file" id="har-file" accept=".har,application/json" hidden>
-    <button class="btn" id="har-import">从 HAR 导入</button>
+    <button class="btn" id="har-import" title="从抓包工具导出的 .har 文件一键导入（可自动建号、保存凭据与设备档案）">📥 从 HAR 导入</button>
     <button class="btn primary" id="add-user">+ 添加用户</button>
   </div>
 </div>
@@ -162,7 +163,7 @@ UI.qs('#add-user').addEventListener('click', function () {
   };
 });
 
-// ============ 从 HAR 一键导入（唯一 HAR 入口）============
+// ============ 从 HAR 一键导入（次要入口，推荐优先用 curl）============
 // 自动识别起点昵称：同名用户不存在则新建、存在则更新；
 // 连带保存账号凭据、设备档案与软件版本。
 const HAR_NICK_RE = /^[\u4e00-\u9fa5A-Za-z0-9_]{2,20}$/;

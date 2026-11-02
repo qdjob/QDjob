@@ -6,17 +6,23 @@
 - 执行时以工作目录为 cwd，使 QDjob 读写同一份 config.json / cookies / logs
 """
 
+import json
 import os
 import platform
 import re
 import shutil
+import signal
 import subprocess
 import sys
+import threading
 import time
 
 import web_config as wc
 
 SYSTEM = platform.system()
+RUN_STATE_FILE = ".qdjob_run.json"
+_ACTIVE_PROC = None
+_ACTIVE_LOCK = threading.Lock()
 
 
 def _candidate_dirs():
@@ -96,6 +102,170 @@ def is_compiled():
     return bool(getattr(sys, "frozen", False))
 
 
+# ==================== 上一次运行进程清理（仅打包版启用）====================
+def _state_path():
+    return os.path.join(wc.get_workdir(), RUN_STATE_FILE)
+
+
+def _append_run_log(text):
+    """把进程管理日志追加到 logs/manual_run.log，失败时静默。"""
+    try:
+        wc.ensure_dirs()
+        with open(os.path.join(wc.logs_dir(), "manual_run.log"), "a", encoding="utf-8") as f:
+            f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {text}\n")
+    except OSError:
+        pass
+
+
+def _read_state():
+    try:
+        with open(_state_path(), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_state(pid, exe):
+    try:
+        with open(_state_path(), "w", encoding="utf-8") as f:
+            json.dump({"pid": int(pid), "exe": os.path.abspath(exe), "started": time.time()}, f)
+    except OSError:
+        pass
+
+
+def _clear_state(pid=None):
+    """删除 PID 状态文件；指定 pid 时仅在匹配时删除，避免误删新进程状态。"""
+    state = _read_state()
+    if pid is not None and state.get("pid") not in (None, pid):
+        return
+    try:
+        os.remove(_state_path())
+    except OSError:
+        pass
+
+
+def _windows_process_path(pid):
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+        if not handle:
+            return None
+        try:
+            buf = ctypes.create_unicode_buffer(32768)
+            size = wintypes.DWORD(len(buf))
+            if kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+                return buf.value
+            return None
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _process_path(pid):
+    if SYSTEM == "Windows":
+        return _windows_process_path(pid)
+    try:
+        return os.readlink(f"/proc/{int(pid)}/exe")
+    except OSError:
+        return None
+
+
+def _same_path(a, b):
+    try:
+        return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+    except (OSError, TypeError):
+        return False
+
+
+def _terminate_process(pid, expected_exe):
+    """仅当 PID 对应可执行文件与 expected_exe 一致时才终止，避免误杀其他程序。"""
+    if not pid or not expected_exe:
+        return False
+    actual_exe = _process_path(pid)
+    if not actual_exe or not _same_path(actual_exe, expected_exe):
+        return False
+
+    _append_run_log(f"检测到上一次 QDjob 仍在运行（PID {pid}），正在终止")
+    try:
+        if SYSTEM == "Windows":
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            result = subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                creationflags=creationflags, timeout=10,
+            )
+            return result.returncode == 0
+        os.kill(pid, signal.SIGTERM)
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                return True
+            time.sleep(0.2)
+        os.kill(pid, signal.SIGKILL)
+        return True
+    except Exception as e:  # noqa: BLE001
+        _append_run_log(f"终止上一次 QDjob 失败（PID {pid}）: {e}")
+        return False
+
+
+def _is_source_command(cmd):
+    if not cmd:
+        return True
+    name = os.path.basename(cmd[0]).lower()
+    return name in {"python", "python.exe", "python3", "python3.exe", "py", "py.exe"}
+
+
+def _terminate_previous_qdjob(cmd):
+    """
+    打包版启动新任务前，先终止上一次仍在运行的 QDjob。
+    源码运行（python main.py）不做此处理，避免误杀其他 Python 脚本。
+    """
+    global _ACTIVE_PROC
+    if not is_compiled() or _is_source_command(cmd):
+        return
+
+    expected_exe = os.path.abspath(cmd[0])
+    with _ACTIVE_LOCK:
+        proc = _ACTIVE_PROC
+        if proc is not None and proc.poll() is None:
+            if not _terminate_process(proc.pid, expected_exe):
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+
+        state = _read_state()
+        state_pid = state.get("pid")
+        if state_pid and not (proc is not None and state_pid == proc.pid):
+            _terminate_process(state_pid, state.get("exe") or expected_exe)
+
+        _ACTIVE_PROC = None
+        _clear_state()
+
+
+def _remember_process(proc, cmd):
+    global _ACTIVE_PROC
+    with _ACTIVE_LOCK:
+        _ACTIVE_PROC = proc
+    _write_state(proc.pid, cmd[0])
+
+
+def _watch_process(proc):
+    """后台等待非阻塞启动的进程结束，并清理 PID 状态文件。"""
+    try:
+        proc.wait()
+    finally:
+        _clear_state(proc.pid)
+
+
 def find_qdjob_command():
     """
     返回启动 QDjob 的命令列表（list[str]），找不到返回 None。
@@ -135,19 +305,24 @@ def run_qdjob():
         f"手动执行: {os.path.basename(cmd[-1])} =====\n"
     )
     try:
+        _terminate_previous_qdjob(cmd)
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(header)
-        out = open(log_file, "a", encoding="utf-8")
         creationflags = 0
         if SYSTEM == "Windows":
             creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        proc = subprocess.Popen(
-            cmd,
-            cwd=wc.get_workdir(),
-            stdout=out,
-            stderr=subprocess.STDOUT,
-            creationflags=creationflags,
-        )
+        with open(log_file, "a", encoding="utf-8") as out:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=wc.get_workdir(),
+                stdout=out,
+                stderr=subprocess.STDOUT,
+                creationflags=creationflags,
+            )
+        _remember_process(proc, cmd)
+        threading.Thread(
+            target=_watch_process, args=(proc,), daemon=True, name=f"qdjob-watch-{proc.pid}"
+        ).start()
         return {"ok": True, "message": "已启动 QDjob", "data": {"pid": proc.pid}}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "message": f"启动 QDjob 失败: {e}"}
@@ -161,6 +336,7 @@ def run_qdjob_blocking(src="scheduled"):
     wc.ensure_dirs()
     log_file = os.path.join(wc.logs_dir(), "manual_run.log")
     try:
+        _terminate_previous_qdjob(cmd)
         creationflags = 0
         if SYSTEM == "Windows":
             creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -171,7 +347,11 @@ def run_qdjob_blocking(src="scheduled"):
                 cmd, cwd=wc.get_workdir(), stdout=out, stderr=subprocess.STDOUT,
                 creationflags=creationflags,
             )
-            code = proc.wait()
+            _remember_process(proc, cmd)
+            try:
+                code = proc.wait()
+            finally:
+                _clear_state(proc.pid)
         return code == 0, f"退出码 {code}"
     except Exception as e:  # noqa: BLE001
         return False, str(e)

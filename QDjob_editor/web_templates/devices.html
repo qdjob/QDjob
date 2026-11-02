@@ -182,22 +182,6 @@ function openDeviceModal(rec) {
       UI.escapeHtml(msg) + '</span>';
   }
 
-  UI.qs('#f-parse').onclick = async function () {
-    const fields = {
-      ibex: UI.qs('#f-ibex').value.trim(),
-      devicetype: UI.qs('#f-devicetype').value.trim(),
-      devicename: UI.qs('#f-devicename').value.trim(),
-      osversion: UI.qs('#f-osversion').value.trim(),
-      version: UI.qs('#f-version').value.trim(),
-      sdkversion: UI.qs('#f-sdkversion').value.trim(),
-      signature: UI.qs('#f-signature').value.trim(),
-    };
-    if (!fields.ibex) { UI.toast('ibex 为必填项', 'warn'); return; }
-    const r = await UI.api('POST', '/api/devices/parse-fields', { fields: fields });
-    if (!r.ok) return;
-    applyParsed(r, '#f-warn');
-  };
-
   // 导入来源：保存设备档案时记录 provenance
   let parsedSource = '';
 
@@ -223,6 +207,22 @@ function openDeviceModal(rec) {
     parsedSource = 'curl';
     applyParsed(r, '#d-warn');
     showCredentialHint(r, '#d-warn');
+  };
+
+  UI.qs('#f-parse').onclick = async function () {
+    const fields = {
+      ibex: UI.qs('#f-ibex').value.trim(),
+      devicetype: UI.qs('#f-devicetype').value.trim(),
+      devicename: UI.qs('#f-devicename').value.trim(),
+      osversion: UI.qs('#f-osversion').value.trim(),
+      version: UI.qs('#f-version').value.trim(),
+      sdkversion: UI.qs('#f-sdkversion').value.trim(),
+      signature: UI.qs('#f-signature').value.trim(),
+    };
+    if (!fields.ibex) { UI.toast('ibex 为必填项', 'warn'); return; }
+    const r = await UI.api('POST', '/api/devices/parse-fields', { fields: fields });
+    if (!r.ok) return;
+    applyParsed(r, '#f-warn');
   };
 
   UI.qs('#d-save').onclick = async function () {

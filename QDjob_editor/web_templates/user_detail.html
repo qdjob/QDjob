@@ -58,9 +58,9 @@
   <div class="card">
     <div class="card-title">✍️ 手动填写 Cookies <span class="hint">当前主要使用方式</span></div>
 
-    <details class="advanced">
-      <summary>从抓包 curl 快速填入（可反复粘贴，逐步补充信息）</summary>
-      <p class="help muted mt-8">解析后只填入下方表单、不直接保存；可以多次粘贴不同请求（例如先贴登录请求拿设备参数与 ibex，再贴业务请求拿 Cookies），确认无误后点下方「保存 Cookies」。新建用户或一键导入请到「用户管理」页使用「从 HAR 导入」。</p>
+    <details class="advanced" open>
+      <summary>① 从抓包 curl 快速填入（推荐，可反复粘贴逐步补充）</summary>
+      <p class="help muted mt-8">解析后只填入下方表单、不直接保存；可以多次粘贴不同请求（例如先贴登录请求拿设备参数与 ibex，再贴业务请求拿 Cookies），确认无误后点下方「保存 Cookies」。</p>
       <div class="field"><textarea id="m-curl" rows="3" placeholder="curl -X POST ..."></textarea></div>
       <div class="btn-row"><button class="btn" id="m-curl-parse">解析并填入</button></div>
       <p class="help mt-8" id="m-curl-warn"></p>
@@ -146,6 +146,7 @@
 <section id="tab-tasks" class="hidden">
   <div class="card">
     <div class="card-title">✅ 任务开关</div>
+    <p class="help muted">「广告加点任务」「天降福利任务」仅新版本客户端有效；旧版本账号不会出现对应任务，保持开启即可，不会报错。</p>
     <div class="checkbox-grid" id="task-grid"></div>
   </div>
   <div class="card">
@@ -470,7 +471,6 @@ UI.qs('#convert-cookies').addEventListener('click', async function () {
 });
 
 // 从抓包 curl 快速填入：只填表单不保存，可反复粘贴逐步补充
-// （新建用户或一键导入在「用户管理」页的「从 HAR 导入」）
 UI.qs('#m-curl-parse').addEventListener('click', async function () {
   const text = UI.qs('#m-curl').value.trim();
   if (!text) { UI.toast('请先粘贴 curl', 'warn'); return; }
@@ -608,13 +608,19 @@ UI.qs('#dev-prepare').addEventListener('click', async function () {
 });
 
 // ==================== 任务 ====================
+const NEW_VERSION_TASKS = ['广告加点任务', '天降福利任务'];
+
 function renderTasks(tasks) {
   const names = (META.task_names && META.task_names.length) ? META.task_names : Object.keys(tasks);
   const box = UI.qs('#task-grid');
   box.innerHTML = names.map(function (name) {
     const checked = tasks[name] !== false ? 'checked' : '';
-    return '<label class="checkbox"><input type="checkbox" data-task="' + UI.escapeHtml(name) + '" ' + checked + '> ' +
-      UI.escapeHtml(name) + '</label>';
+    const badge = NEW_VERSION_TASKS.indexOf(name) >= 0
+      ? ' <span class="tag mute">仅新版本</span>' : '';
+    const title = NEW_VERSION_TASKS.indexOf(name) >= 0
+      ? ' title="仅新版本客户端有效，旧版本账号可保持开启"' : '';
+    return '<label class="checkbox"' + title + '><input type="checkbox" data-task="' + UI.escapeHtml(name) + '" ' + checked + '> ' +
+      UI.escapeHtml(name) + badge + '</label>';
   }).join('');
 }
 

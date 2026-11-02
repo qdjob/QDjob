@@ -23,6 +23,8 @@ TASK_NAMES = [
     "签到任务",
     "激励碎片任务",
     "章节卡任务",
+    "广告加点任务",
+    "天降福利任务",
     "游戏中心任务",
     "每日抽奖任务",
     "每周自动兑换章节卡",
@@ -172,6 +174,10 @@ def load_config():
                 user.setdefault("usertype", "captcha")
                 user.setdefault("tokenid", "")
                 user.setdefault("tasks", {t: True for t in TASK_NAMES})
+                # 兼容旧配置：已存在的 tasks 字典也补齐新增任务（默认开启）
+                if isinstance(user.get("tasks"), dict):
+                    for task_name in TASK_NAMES:
+                        user["tasks"].setdefault(task_name, True)
                 user.setdefault("push_services", [])
                 user.setdefault("cookies_refresh_interval_days", 20)
                 user.setdefault("last_cookies_refresh_time", "")
