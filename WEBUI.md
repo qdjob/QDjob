@@ -1,7 +1,9 @@
 # QDjob 配置编辑器 WebUI
 
+> ⚠️ **重要通知**：桌面版 GUI（`QDjob_editor.exe` / `GUI.py`）自 **v1.4.3** 起不再维护，功能不再更新。请统一使用网页版 WebUI（`QDjob_editor_web.exe`）。
+
 用浏览器作为界面的配置编辑器，用于编辑 `config.json` 与 `cookies`，支持定时任务、手动执行与日志查看。
-与桌面版 `GUI.py` 完全独立，二者可分别使用。
+本项目自 v1.4.3 起仅维护 WebUI；旧桌面版 `GUI.py` 不再更新。
 
 ## 1. 直接运行（开发 / 本地测试）
 
@@ -85,7 +87,7 @@ WebUI 与核心 QDjob 使用同一套约定：
 
 ## 6. Docker 部署（推荐给容器用户）
 
-镜像内同时包含核心 QDjob 与 WebUI（不含 GUI）。
+镜像内同时包含核心 QDjob 与 WebUI（不含已停止维护的 GUI）。
 
 ```bash
 docker run -d \

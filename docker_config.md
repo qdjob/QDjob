@@ -1,12 +1,14 @@
 # QDjob Docker 部署指南
 
+> ⚠️ **重要通知**：桌面版 GUI（`QDjob_editor.exe` / `GUI.py`）自 **v1.4.3** 起不再维护，功能不再更新。请统一使用网页版 WebUI（`QDjob_editor_web.exe`），本文中的配置编辑器均指 WebUI。
+
 > 本指南详细介绍了 QDjob 项目的 Docker 部署方式，帮助您快速完成服务搭建。
 
 ## 📌 前置说明
 
 在开始部署前，请注意以下关键点：
 
-1. **镜像已内置网页版配置界面（WebUI）**：容器启动后，浏览器访问 `http://<主机IP>:33989` 即可完成全部配置，**无需**事先在本地用 `QDjob_editor` 生成配置文件
+1. **镜像已内置网页版配置界面（WebUI）**：容器启动后，浏览器访问 `http://<主机IP>:33989` 即可完成全部配置，**无需**事先在本地用 `QDjob_editor_web` 生成配置文件
 2. **访问口令**：建议通过环境变量 `QDJOB_WEBUI_PASSWORD` 设置访问口令；未设置时，任何能访问该端口的人都可以修改配置
    - **注意：建议避免使用中文用户名**（容器语言环境可能导致异常）
    - 容器启动时会自动在映射目录创建空的 `config.json` 和 `cookies` 文件夹
@@ -31,7 +33,7 @@ mkdir -p /your/data/path/QDjob
 ### 3. 配置用户（二选一）
 
 - **方式一（推荐）**：跳过本步骤，直接按第 4 步启动容器，然后浏览器访问 `http://<主机IP>:33989` 在网页中配置
-- **方式二**：事先使用 `QDjob_editor` / `QDjob_editor_web` 在本地配置好后，将 `config.json` 和 `cookies` 文件夹复制到 `/your/data/path/QDjob`
+- **方式二**：事先使用 `QDjob_editor_web` 在本地配置好后，将 `config.json` 和 `cookies` 文件夹复制到 `/your/data/path/QDjob`
 
 ### 4. 启动容器
 
@@ -104,7 +106,7 @@ services:
 
 - **方式一（推荐）**：直接启动服务后，浏览器访问 `http://<主机IP>:33989` 在网页中配置
 - **方式二**：事先使用编辑器配置好后，将 `config.json` 和 `cookies` 文件夹复制到 `~/QDjob/data` 目录
-  - 与上面类似，先使用 `QDjob_editor.exe` 生成有效配置
+  - 与上面类似，先使用 `QDjob_editor_web.exe` 生成有效配置
 
 ### 4. 启动服务
 
@@ -186,12 +188,12 @@ services:
 3. 保存后，点击"使用模板" → 创建容器
 4. **配置用户（二选一）**：
    - **方式一（推荐）**：浏览器访问 `http://<面板服务器IP>:33989`（先在宝塔「安全」放行该端口）在网页中配置
-   - **方式二**：使用 `QDjob_editor` 生成配置后，通过宝塔文件管理上传至 `/www/wwwroot/QDjob/data`
+   - **方式二**：使用 `QDjob_editor_web` 生成配置后，通过宝塔文件管理上传至 `/www/wwwroot/QDjob/data`
 
 ### 4. 配置文件上传说明（方式二）
 
 1. 在宝塔面板中，进入 **文件** → 找到 `/www/wwwroot/QDjob/data`
-2. 将本地通过 `QDjob_editor` 生成的以下文件上传：
+2. 将本地通过 `QDjob_editor_web` 生成的以下文件上传：
    - `config.json`
    - `cookies`文件夹（包含所有账号的 cookie 文件）
 3. 确保文件权限正确（通常默认即可），配置完毕后目录树结构如下：
@@ -210,7 +212,7 @@ services:
    - 容器内置网页版（WebUI），浏览器访问 `http://<主机IP>:33989` 即可完成用户、真实设备、定时方案等全部配置
 
 3. **也可以离线配置**：
-   - 使用 `QDjob_editor` / `QDjob_editor_web` 在本地生成配置后，复制到映射目录
+   - 使用 `QDjob_editor_web` 在本地生成配置后，复制到映射目录
 
 ### 定时任务配置
 
@@ -270,5 +272,5 @@ services:
 └── logs/               # 日志目录（自动生成）
 ```
 
-> 提示：推荐直接使用容器内置的网页版（WebUI）进行配置；也可用 `QDjob_editor` / `QDjob_editor_web` 生成配置后上传。
+> 提示：推荐直接使用容器内置的网页版（WebUI）进行配置；也可用 `QDjob_editor_web` 生成配置后上传。
 
