@@ -12,13 +12,26 @@ from push import *
 from logger import LoggerManager
 from logger import DEFAULT_LOG_RETENTION
 
-__version__ = 'v1.4.1'
+__version__ = 'v1.4.3'
 
 # 配置常量
 CONFIG_FILE = 'config.json'
 COOKIES_DIR = 'cookies'
 DEFAULT_USER_AGENT = "Mozilla/5.0 (Linux; Android 13; PDEM10 Build/TP1A.220905.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/109.0.5414.86 MQQBrowser/6.2 TBS/047601 Mobile Safari/537.36 QDJSSDK/1.0  QDNightStyle_1  QDReaderAndroid/7.9.384/1466/1000032/OPPO/QDShowNativeLoading"
 DEFAULT_COOKIES_REFRESH_INTERVAL_DAYS = 20  # cookies 自动刷新间隔（天），默认20天
+
+# 网络超时（秒）：默认 900 秒（15 分钟），仅作为后台任务的兜底保护
+# 性能/网络较差的环境可适当放宽；可用环境变量覆盖
+def _env_timeout(name: str, default: str) -> float:
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return float(default)
+
+REQUEST_CONNECT_TIMEOUT = _env_timeout('QDJOB_CONNECT_TIMEOUT', '900')
+REQUEST_READ_TIMEOUT = _env_timeout('QDJOB_READ_TIMEOUT', '900')
+REQUEST_TIMEOUT = (REQUEST_CONNECT_TIMEOUT, REQUEST_READ_TIMEOUT)
+
 logger = LoggerManager().setup_basic_logger()
 
 SDK_VERSION_TABLE = {
@@ -35,6 +48,9 @@ class QidianError(Exception):
     def __init__(self, message: str, raw_data: Optional[Dict] = None):
         super().__init__(message)
         self.raw_data = raw_data
+
+class QidianTimeoutError(QidianError):
+    """接口请求超时异常（超时后终止当前任务）"""
 
 class UserConfig:
     """用户配置"""
@@ -129,11 +145,17 @@ class ConfigManager:
             ibex = user_data.get('ibex', '')
             readtime_task_config = user_data.get('readtime_task_config', {})
 
+            # 新任务默认开启：旧配置中没有这些键时自动补齐，显式设为 false 仍然生效
+            tasks = user_data.get('tasks', {})
+            if isinstance(tasks, dict):
+                for new_task in ('广告加点任务', '天降福利任务'):
+                    tasks.setdefault(new_task, True)
+
             user = UserConfig(
                 username=user_data['username'],
                 cookies=cookies,
                 cookies_file=cookies_path,
-                tasks=user_data.get('tasks', {}),
+                tasks=tasks,
                 user_agent=user_agent,
                 ibex=ibex,
                 push_services=push_services,
@@ -367,7 +389,22 @@ class QidianClient:
         self.username = config.username
         self.tokenid = config.tokenid
         self.session = requests.Session()
+        # 标记最近一次请求是否超时，供 TaskProcessor 统一中止任务
+        self.last_request_timeout = False
+        self.last_timeout_url = ''
         self._init_headers()
+
+    def reset_timeout_state(self) -> None:
+        """重置超时标记（每个任务开始前调用）"""
+        self.last_request_timeout = False
+        self.last_timeout_url = ''
+
+    def _mark_timeout(self, url: str, error: Exception) -> None:
+        """记录请求超时，供任务层统一判定为 timeout 并中止后续任务"""
+        self.last_request_timeout = True
+        self.last_timeout_url = url
+        logger.error(f"接口请求超时: {url}（{error}）")
+
         # self.init_versions()
     
     def _init_headers(self) -> None:
@@ -474,7 +511,8 @@ class QidianClient:
             logger.error(f"{error_msg}: {response.text}")
             raise QidianError(f"{error_msg}: {response.text}")
         
-    def _make_qd_request(self, url: str, params: dict = None, data: dict = None, method: str = 'POST') -> Dict[str, Any]:
+    def _make_qd_request(self, url: str, params: dict = None, data: dict = None, method: str = 'POST',
+                         extra_headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         """创建qd类型请求"""
         # 添加随机延迟
         time.sleep(random.uniform(1, 3))  # 随机延迟 1~3 秒
@@ -499,15 +537,26 @@ class QidianClient:
             'ibex': ibex,
             'borgus': borgus
         })
+        if extra_headers:
+            headers.update(extra_headers)
 
         # 更新 cookies
         self.config.cookies['QDInfo'] = QDInfo
 
         # 根据 method 显式选择请求方式
-        if method.upper() == 'POST':
-            response = self.session.post(url, params=params, data=data, headers=headers, cookies=self.config.cookies)
-        else:
-            response = self.session.get(url, params=params, headers=headers, cookies=self.config.cookies)
+        try:
+            if method.upper() == 'POST':
+                response = self.session.post(url, params=params, data=data, headers=headers,
+                                             cookies=self.config.cookies, timeout=REQUEST_TIMEOUT)
+            else:
+                response = self.session.get(url, params=params, headers=headers,
+                                            cookies=self.config.cookies, timeout=REQUEST_TIMEOUT)
+        except requests.exceptions.Timeout as e:
+            self._mark_timeout(url, e)
+            raise QidianTimeoutError(f"接口请求超时: {url}") from e
+        except requests.exceptions.RequestException as e:
+            logger.error(f"网络请求失败: {url}（{e}）")
+            raise QidianError(f"网络请求失败: {url}") from e
 
         return self._handle_response(response, "qd类型请求失败")
 
@@ -540,17 +589,28 @@ class QidianClient:
         self.config.cookies['QDInfo'] = QDInfo
         
          # 根据 method 显式选择请求方式
-        if method.upper() == 'POST':
-            if params=={} or params==None:
-                response = self.session.post(url, data=data, headers=headers, cookies=self.config.cookies)
+        try:
+            if method.upper() == 'POST':
+                if params=={} or params==None:
+                    response = self.session.post(url, data=data, headers=headers,
+                                                 cookies=self.config.cookies, timeout=REQUEST_TIMEOUT)
+                else:
+                    response = self.session.post(url, params=params, data=data, headers=headers,
+                                                 cookies=self.config.cookies, timeout=REQUEST_TIMEOUT)
             else:
-                response = self.session.post(url, params=params, data=data, headers=headers, cookies=self.config.cookies)
-        else:
-            if params=={} or params==None:
-                response = self.session.get(url, headers=headers, cookies=self.config.cookies, data=data)
-            else:
-                response = self.session.get(url, params=params, headers=headers, cookies=self.config.cookies, data=data)
-            
+                if params=={} or params==None:
+                    response = self.session.get(url, headers=headers, cookies=self.config.cookies,
+                                                data=data, timeout=REQUEST_TIMEOUT)
+                else:
+                    response = self.session.get(url, params=params, headers=headers,
+                                                cookies=self.config.cookies, data=data, timeout=REQUEST_TIMEOUT)
+        except requests.exceptions.Timeout as e:
+            self._mark_timeout(url, e)
+            raise QidianTimeoutError(f"接口请求超时: {url}") from e
+        except requests.exceptions.RequestException as e:
+            logger.error(f"网络请求失败: {url}（{e}）")
+            raise QidianError(f"网络请求失败: {url}") from e
+
         return self._handle_response(response, "sdk类型请求失败")
     
     def _solve_captcha(self, captcha_data: dict) -> Optional[dict]:
@@ -756,10 +816,13 @@ class QidianClient:
             'autotime': '30',
         }
         try:
-            response = self.session.post(url=url, headers=headers, data=data, timeout=60)  # 添加超时设置
-        except requests.exceptions.Timeout:
-            logger.error("请求超时，请检查网络连接")
+            response = self.session.post(url=url, headers=headers, data=data, timeout=REQUEST_TIMEOUT)
+        except requests.exceptions.Timeout as e:
+            self._mark_timeout(url, e)
             return {"NeedRefresh": False, "status": "timeout", "expired_time": ""}
+        except requests.exceptions.RequestException as e:
+            logger.error(f"[ptlogin_checkstatus] 网络请求失败: {e}")
+            return {"NeedRefresh": False, "status": "failed", "expired_time": ""}
         logger.debug(f"[ptlogin_checkstatus]: {response.text}")
         res = response.json()
         if not res:
@@ -851,10 +914,11 @@ class QidianClient:
                 data=data, 
                 headers=headers, 
                 cookies=cookies, 
-                timeout=60  # 添加超时设置
+                timeout=REQUEST_TIMEOUT
             )
-        except requests.exceptions.Timeout:
-            logger.error("登录druidv6.if.qidian.com超时，超过60秒")
+        except requests.exceptions.Timeout as e:
+            self._mark_timeout(url, e)
+            logger.error("登录druidv6.if.qidian.com超时")
             return False
         except requests.exceptions.RequestException as e:
             logger.error(f"登录druidv6.if.qidian.com请求异常: {e}")
@@ -934,11 +998,15 @@ class QidianClient:
         self.config.cookies['QDInfo'] = QDInfo
         
         try:
-            response = self.session.get(url, params=params, cookies=self.config.cookies, headers=headers)
+            response = self.session.get(url, params=params, cookies=self.config.cookies,
+                                        headers=headers, timeout=REQUEST_TIMEOUT)
             result = self._handle_response(response, "登录检测失败")
             
             if result.get('Data', {}).get('Nickname'):
                 return result['Data']['Nickname']
+            return None
+        except requests.exceptions.Timeout as e:
+            self._mark_timeout(url, e)
             return None
         except Exception as e:
             logger.error(f"登录检测异常: {e}")
@@ -1055,6 +1123,355 @@ class QidianClient:
         logger.error(f"激励任务执行失败: {result}")
         return {'status': 'failed', 'raw_response': result}
     
+    def _finish_watch_with_captcha(self, url: str, data: dict,
+                                   sign_type: str = 'qd',
+                                   extra_headers: Optional[Dict[str, str]] = None,
+                                   max_captcha_attempts: int = 3) -> Dict[str, Any]:
+        """发送 finishWatch 请求，触发验证码时保留 taskId/gradientLevel 等原始参数"""
+        captcha_attempt = 0
+        captcha_solution = None
+        captcha_data = {}
+
+        while captcha_attempt <= max_captcha_attempts:
+            request_data = data.copy()
+
+            if captcha_attempt > 0 and captcha_solution:
+                request_data.update({
+                    'sessionKey': str(captcha_data.get('SessionKey', '')),
+                    'banId': str(captcha_data.get('BanId', '0')),
+                    'captchaTicket': captcha_solution.get('ticket', ''),
+                    'captchaRandStr': captcha_solution.get('randstr', ''),
+                    'challenge': '',
+                    'validate': '',
+                    'seccode': '',
+                })
+
+            if sign_type == 'sdk':
+                result = self._make_sdk_request(url, data=request_data, method='POST')
+            else:
+                result = self._make_qd_request(url, data=request_data, method='POST', extra_headers=extra_headers)
+
+            if result.get('is_captcha'):
+                if not self.tokenid:
+                    logger.info("未设置tokenid，跳过验证码处理")
+                    return {
+                        'status': 'captcha_failed',
+                        'msg': '跳过验证码处理',
+                        'captcha_data': result.get('captcha_data')
+                    }
+
+                captcha_attempt += 1
+                captcha_data = result['captcha_data']
+                logger.info(f"第{captcha_attempt}次尝试处理广告·加点验证码...")
+                captcha_solution = self._solve_captcha(captcha_data)
+
+                if captcha_solution is False:
+                    return {
+                        'status': 'captcha',
+                        'msg': '无法处理的验证码类型',
+                        'captcha_data': captcha_data
+                    }
+
+                if captcha_solution is None:
+                    logger.warning(f"验证码识别服务返回失败，准备重试 (已尝试 {captcha_attempt}/{max_captcha_attempts} 次)")
+                continue
+
+            return result
+
+        return {
+            'status': 'captcha_failed',
+            'msg': f'验证码处理或校验失败，已达到最大尝试次数 ({max_captcha_attempts}次)',
+            'captcha_data': captcha_data
+        }
+
+    def do_reading_adv_job(self, task_id: str) -> dict:
+        """完成单个“广告·加点”子任务（gradientLevel 依次为 1/2/3）"""
+        url = "https://h5.if.qidian.com/argus/api/v1/video/adv/finishWatch"
+        # 实测该接口不需要 cecelia、gorgon、abtest-gzip，置空即可
+        extra_headers = {
+            'cecelia': '',
+            'gorgon': '',
+            'abtest-gzip': '',
+        }
+        rewards = []
+
+        try:
+            for gradient_level in (1, 2, 3):
+                data = {
+                    'taskId': task_id,
+                    'gradientLevel': str(gradient_level),
+                    'type': '1',
+                    'h5': '0',
+                    'oneOff': '0',
+                    'sessionKey': '',
+                    'banId': '0',
+                    'captchaTicket': '',
+                    'captchaRandStr': '',
+                    'challenge': '',
+                    'validate': '',
+                    'seccode': '',
+                }
+
+                result = self._finish_watch_with_captcha(url, data, sign_type='qd', extra_headers=extra_headers)
+
+                # 验证码/登录失效等特殊结果直接向上传递
+                if isinstance(result, dict) and result.get('status') in ('captcha', 'captcha_failed', 'Unauthorized'):
+                    return result
+
+                if isinstance(result, dict) and result.get("status", 200) == 401 and result.get("error", "") == "Unauthorized":
+                    logger.error("登录已失效，请重新登录或者抓取cookies")
+                    return {"status": "Unauthorized", "msg": "登录已失效，请重新抓取cookies"}
+
+                if not isinstance(result, dict) or result.get('Result') not in (0, "0"):
+                    logger.error(f"广告·加点子任务[{task_id}] gradientLevel={gradient_level} 执行失败: {result}")
+                    return {'status': 'failed', 'raw_response': result, 'msg': '广告·加点任务执行失败'}
+
+                for reward in (result.get('Data') or {}).get('RewardList') or []:
+                    desc = reward.get('Desc')
+                    if desc:
+                        rewards.append(desc)
+                        logger.info(f"广告·加点奖励: {desc}")
+
+                logger.info(f"广告·加点子任务[{task_id}] gradientLevel={gradient_level} 完成")
+                if gradient_level < 3:
+                    time.sleep(random.uniform(1, 2))
+
+            return {'status': 'success', 'rewards': rewards}
+
+        except Exception as e:
+            logger.error(f"广告·加点子任务[{task_id}]执行异常: {e}")
+            return {'status': 'error', 'error': str(e), 'msg': '广告·加点任务异常，请检查日志'}
+
+
+    def reading_advjob(self) -> dict:
+        """执行阅读页“广告·加点”任务（只要 ReadingPageTaskModule.TaskList 中存在并已解锁就执行）"""
+        try:
+            result = self.get_adv_job()
+            # 检测登录状态
+            if result.get("status", 200) == 401 and result.get("error", "") == "Unauthorized":
+                logger.error("登录已失效，请重新登录或者抓取cookies")
+                return {"status": "Unauthorized", "msg": "登录已失效，请重新抓取cookies"}
+
+            module = (result.get('Data') or {}).get('ReadingPageTaskModule') or {}
+            task_list = module.get('TaskList') or []
+
+            # 接口未返回该模块或 TaskList 为空时直接跳过（不依据版本号判断）
+            if not task_list:
+                logger.info("当前账号没有广告·加点任务，跳过（该任务仅新版本有效）")
+                return {'status': 'success', 'msg': '当前版本无广告·加点任务（仅新版本有效）'}
+
+            def _status_value(task: dict) -> int:
+                try:
+                    return int(task.get('Status', 0))
+                except (TypeError, ValueError):
+                    return 0
+
+            def _pick_pending(tasks: List[dict]) -> List[dict]:
+                """筛选未完成且已解锁（Status>=0）的子任务"""
+                return [
+                    task for task in tasks
+                    if task.get('IsFinished') != 1
+                    and _status_value(task) >= 0
+                ]
+
+            target_tasks = task_list
+            if target_tasks and all(task.get('IsFinished') == 1 for task in target_tasks):
+                logger.info("广告·加点任务已完成")
+                return {'status': 'success', 'msg': '任务已完成'}
+
+            if not _pick_pending(task_list):
+                logger.info("广告·加点任务暂无可执行子任务（需阅读解锁）")
+                return {'status': 'success', 'msg': '暂无可执行子任务，需阅读解锁'}
+
+            rewards = []
+            attempted = set()
+
+            # 子任务存在链式解锁：每完成一个重新拉取主页面，继续处理新解锁的任务
+            for _ in range(len(target_tasks) + 1):
+                active_tasks = [
+                    task for task in _pick_pending(task_list)
+                    if task.get('TaskId') not in attempted
+                ]
+                if not active_tasks:
+                    break
+
+                task = active_tasks[0]
+                task_id = task.get('TaskId')
+                attempted.add(task_id)
+                logger.info(
+                    f"开始执行广告·加点子任务: {task.get('Title', '广告·加点')} "
+                    f"({task_id}) Process={task.get('Process', 0)}/{task.get('Total', 0)}"
+                )
+
+                task_result = self.do_reading_adv_job(task_id)
+
+                if task_result.get('status') == 'success':
+                    rewards.extend(task_result.get('rewards') or [])
+                    time.sleep(random.randint(1, 2))
+                elif task_result.get('status') == 'Unauthorized':
+                    logger.error("登录已失效，请重新登录或者抓取cookies")
+                    return {'status': 'Unauthorized', 'msg': '登录已失效，请重新抓取cookies'}
+                elif task_result.get('status') == 'captcha':
+                    logger.warning("无法处理的验证码类型")
+                    return {'status': task_result.get('status', 'captcha'), 'result': task_result, 'msg': '无法处理的验证码类型'}
+                elif task_result.get('status') == 'captcha_failed':
+                    logger.error(f"验证码处理失败: {task_result.get('msg')}")
+                    return {'status': task_result.get('status', 'captcha'), 'result': task_result, 'msg': task_result.get('msg')}
+                else:
+                    logger.error(f"执行广告·加点任务失败: {task_result.get('msg', '未知原因')}")
+                    return {
+                        'status': 'failed',
+                        'msg': task_result.get('msg', '执行广告·加点任务失败'),
+                        'raw_response': task_result.get('raw_response')
+                    }
+
+                # 重新拉取任务列表，处理链式解锁
+                check_result = self.get_adv_job()
+                if check_result.get("status", 200) == 401 and check_result.get("error", "") == "Unauthorized":
+                    logger.error("登录已失效，请重新登录或者抓取cookies")
+                    return {"status": "Unauthorized", "msg": "登录已失效，请重新抓取cookies"}
+                task_list = (check_result.get('Data') or {}).get('ReadingPageTaskModule', {}).get('TaskList') or []
+
+            # 最终校验
+            check_result = self.get_adv_job()
+            if check_result.get("status", 200) == 401 and check_result.get("error", "") == "Unauthorized":
+                logger.error("登录已失效，请重新登录或者抓取cookies")
+                return {"status": "Unauthorized", "msg": "登录已失效，请重新抓取cookies"}
+
+            check_list = (check_result.get('Data') or {}).get('ReadingPageTaskModule', {}).get('TaskList') or []
+            check_targets = check_list
+
+            if not check_targets or all(task.get('IsFinished') == 1 for task in check_targets):
+                msg = '任务已完成'
+                if rewards:
+                    msg += f"，获得: {'、'.join(dict.fromkeys(rewards))}"
+                logger.info(f"广告·加点任务完成{('，获得: ' + '、'.join(dict.fromkeys(rewards))) if rewards else ''}")
+                return {'status': 'success', 'msg': msg}
+
+            locked_count = sum(1 for task in check_targets if _status_value(task) < 0)
+            if locked_count:
+                logger.info(f"广告·加点任务仍有{locked_count}个子任务未解锁（需阅读）")
+                return {'status': 'success', 'msg': f'已完成可执行子任务，剩余{locked_count}个需阅读解锁'}
+
+            logger.error("广告·加点任务未完成")
+            return {'status': 'failed', 'code': 10086, 'msg': '任务未完成'}
+
+        except Exception as e:
+            logger.error(f"广告·加点任务异常: {e}")
+            return {'status': 'error', 'error': str(e), 'msg': '任务异常，请检查日志'}
+
+
+    def get_main_page_dialog(self) -> Dict[str, Any]:
+        """获取天降福利弹窗任务"""
+        url = "https://h5.if.qidian.com/argus/api/v2/video/adv/mainPageDialog"
+        return self._make_sdk_request(url, method='GET')
+
+    def do_dialog_adv_job(self, task_id: str) -> dict:
+        """完成天降福利广告任务（SDKSign + 新式参数，无需 gradientLevel）"""
+        url = "https://h5.if.qidian.com/argus/api/v1/video/adv/finishWatch"
+        data = {
+            'taskId': task_id,
+            'type': '1',
+            'h5': '0',
+            'oneOff': '0',
+            'sessionKey': '',
+            'banId': '0',
+            'captchaTicket': '',
+            'captchaRandStr': '',
+            'challenge': '',
+            'validate': '',
+            'seccode': '',
+        }
+
+        try:
+            result = self._finish_watch_with_captcha(url, data, sign_type='sdk')
+
+            # 验证码/登录失效等特殊结果直接向上传递
+            if isinstance(result, dict) and result.get('status') in ('captcha', 'captcha_failed', 'Unauthorized'):
+                return result
+
+            if isinstance(result, dict) and result.get("status", 200) == 401 and result.get("error", "") == "Unauthorized":
+                logger.error("登录已失效，请重新登录或者抓取cookies")
+                return {"status": "Unauthorized", "msg": "登录已失效，请重新抓取cookies"}
+
+            if not isinstance(result, dict) or result.get('Result') not in (0, "0"):
+                logger.error(f"天降福利任务[{task_id}]执行失败: {result}")
+                return {'status': 'failed', 'raw_response': result, 'msg': '天降福利任务执行失败'}
+
+            rewards = []
+            for reward in (result.get('Data') or {}).get('RewardList') or []:
+                desc = reward.get('Desc')
+                if desc:
+                    rewards.append(desc)
+                    logger.info(f"天降福利奖励: {desc}")
+
+            logger.info(f"天降福利任务[{task_id}]完成")
+            return {'status': 'success', 'rewards': rewards}
+
+        except Exception as e:
+            logger.error(f"天降福利任务[{task_id}]执行异常: {e}")
+            return {'status': 'error', 'error': str(e), 'msg': '天降福利任务异常，请检查日志'}
+
+    def dialog_advjob(self) -> dict:
+        """执行天降福利任务（只要 mainPageDialog 返回有效 TaskId 就执行）"""
+        try:
+            result = self.get_main_page_dialog()
+            # 检测登录状态
+            if result.get("status", 200) == 401 and result.get("error", "") == "Unauthorized":
+                logger.error("登录已失效，请重新登录或者抓取cookies")
+                return {"status": "Unauthorized", "msg": "登录已失效，请重新抓取cookies"}
+
+            data = result.get('Data') or {}
+            task_id = str(data.get('TaskId') or '')
+            # TaskId 为空或 0 表示当前没有天降福利任务（旧版本/已领取/未触发）
+            if not task_id or task_id == '0':
+                logger.info("当前没有天降福利任务，跳过（该任务仅新版本有效）")
+                return {'status': 'success', 'msg': '当前无天降福利任务（仅新版本有效）'}
+
+            dialog_info = data.get('FirstDialog') or {}
+            logger.info(
+                f"开始执行天降福利任务: {dialog_info.get('Title', '天降福利')} ({task_id}) "
+                f"{dialog_info.get('SubTitle', '')}"
+            )
+
+            task_result = self.do_dialog_adv_job(task_id)
+
+            if task_result.get('status') == 'success':
+                rewards = task_result.get('rewards') or []
+                msg = '任务已完成'
+                if rewards:
+                    msg += f"，获得: {'、'.join(dict.fromkeys(rewards))}"
+                logger.info(f"天降福利任务完成{('，获得: ' + '、'.join(dict.fromkeys(rewards))) if rewards else ''}")
+                return {'status': 'success', 'msg': msg}
+            elif task_result.get('status') == 'Unauthorized':
+                logger.error("登录已失效，请重新登录或者抓取cookies")
+                return {'status': 'Unauthorized', 'msg': '登录已失效，请重新抓取cookies'}
+            elif task_result.get('status') == 'captcha':
+                logger.warning("无法处理的验证码类型")
+                return {'status': task_result.get('status', 'captcha'), 'result': task_result, 'msg': '无法处理的验证码类型'}
+            elif task_result.get('status') == 'captcha_failed':
+                logger.error(f"验证码处理失败: {task_result.get('msg')}")
+                return {'status': task_result.get('status', 'captcha'), 'result': task_result, 'msg': task_result.get('msg')}
+            else:
+                logger.error(f"执行天降福利任务失败: {task_result.get('msg', '未知原因')}")
+                return {
+                    'status': 'failed',
+                    'msg': task_result.get('msg', '执行天降福利任务失败'),
+                    'raw_response': task_result.get('raw_response')
+                }
+
+        except QidianTimeoutError as e:
+            logger.error(f"天降福利任务接口超时: {e}")
+            return {'status': 'timeout', 'msg': str(e)}
+        except QidianError as e:
+            # 旧版本或接口不可用时跳过，不影响其他任务
+            logger.warning(f"获取天降福利任务失败（该任务仅新版本有效）: {e}")
+            return {'status': 'success', 'msg': '当前版本无天降福利任务（仅新版本有效）'}
+        except Exception as e:
+            logger.error(f"天降福利任务异常: {e}")
+            return {'status': 'error', 'error': str(e), 'msg': '任务异常，请检查日志'}
+
+
     def get_chapters(self, bookid: str) -> dict:
         """获取章节列表"""
         url = f'https://wxapp.qidian.com/api/book/categoryV2?bookId={bookid}'
@@ -1062,7 +1479,7 @@ class QidianClient:
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.90 Safari/537.36',
         }
         try: 
-            response = requests.get(url, headers=headers)
+            response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
             res_text = response.text
             logger.debug(f"获取章节列表: {res_text}")
             result = response.json()
@@ -1087,6 +1504,9 @@ class QidianClient:
                         'chapterWordscount': chapter.get('cnt'),
                     })
             return chapterlist
+        except requests.exceptions.Timeout as e:
+            self._mark_timeout(url, e)
+            raise QidianTimeoutError(f"获取章节列表超时: {url}") from e
         except Exception as e:
             logger.error(f"获取章节列表异常: {e}")
             return []
@@ -1128,12 +1548,16 @@ class QidianClient:
         })
         self.config.cookies['QDInfo'] = QDInfo
         try:
-            response = requests.post(url, data=data, cookies=self.config.cookies, headers=headers)
+            response = requests.post(url, data=data, cookies=self.config.cookies,
+                                     headers=headers, timeout=REQUEST_TIMEOUT)
             res_text = response.text
             logger.debug(f"上报阅读时长: {res_text}")
             result = response.json()
             if result.get('Result') == 0 or result.get('Result') == "0":
                 return True
+            return False
+        except requests.exceptions.Timeout as e:
+            self._mark_timeout(url, e)
             return False
         except Exception as e:
             logger.error(f"上报阅读时长异常: {e}")
@@ -1358,7 +1782,7 @@ class QidianClient:
                     logger.info("游戏中心任务URL为跳转链接类型，转为https链接")
                     # 将qdgame://替换为https://
                     game_url = game_url.replace('qdgame://', 'https://')
-                    res_get_game_url = self.session.get(game_url,allow_redirects=False)
+                    res_get_game_url = self.session.get(game_url, allow_redirects=False, timeout=REQUEST_TIMEOUT)
                     game_url = res_get_game_url.headers.get('Location')
                     logger.info(f"游戏中心任务URL转换结果: {game_url}")
                     if not game_url:
@@ -1376,7 +1800,7 @@ class QidianClient:
                 if 'qdgame://' in game_url:
                     logger.info("游戏中心任务URL为跳转链接类型，转为https链接")
                     game_url = game_url.replace('qdgame://', 'https://')
-                    res_get_game_url = self.session.get(game_url,allow_redirects=False)
+                    res_get_game_url = self.session.get(game_url, allow_redirects=False, timeout=REQUEST_TIMEOUT)
                     game_url = res_get_game_url.headers.get('Location')
                     logger.info(f"游戏中心任务URL转换结果: {game_url}")
                     if not game_url:
@@ -1405,7 +1829,8 @@ class QidianClient:
                 # '_t': '0.05669065654385208',
                 'platformId': '1',
             }
-            response_PHPSESSID = self.session.get(url_track, params=params_get_PHPSESSID, headers=headers, cookies=self.config.cookies)
+            response_PHPSESSID = self.session.get(url_track, params=params_get_PHPSESSID, headers=headers,
+                                                 cookies=self.config.cookies, timeout=REQUEST_TIMEOUT)
             logger.debug(f"response_PHPSESSID: {response_PHPSESSID.text}")
             if not response_PHPSESSID.status_code == 200: 
                 logger.error("获取进程ID失败")
@@ -1428,7 +1853,9 @@ class QidianClient:
                     'platformId': '1',
                 }
                 while run_time < full_time:
-                    response_heartbeat = self.session.get(url_heartbeat, params=params_heartbeat, cookies=cookies, headers=headers)
+                    response_heartbeat = self.session.get(url_heartbeat, params=params_heartbeat,
+                                                          cookies=cookies, headers=headers,
+                                                          timeout=REQUEST_TIMEOUT)
                     res = response_heartbeat.json()
                     if not res.get('code') == 0 or not res.get('data'):
                         logger.error("心跳失败")
@@ -1467,6 +1894,11 @@ class QidianClient:
             else:
                 logger.error("执行游戏中心任务失败")
                 return {'status': 'failed', 'code': 10086, 'msg': '执行游戏中心任务失败'}
+        except requests.exceptions.Timeout as e:
+            self._mark_timeout("游戏中心任务", e)
+            return {'status': 'timeout', 'msg': f'游戏中心任务接口超时: {e}'}
+        except QidianTimeoutError as e:
+            return {'status': 'timeout', 'msg': str(e)}
         except Exception as e:
             logger.error(f"执行游戏中心任务异常: {e}")
             return {'status': 'error', 'error': str(e), 'msg': '任务异常，请检查日志'}
@@ -1828,10 +2260,15 @@ class TaskProcessor:
             return True
             
         logger.info(f"开始执行任务: {task_name}")
+        self.client.reset_timeout_state()
         for attempt in range(1, self.retry_attempts + 1):
             logger.info(f"开始第{attempt}次尝试")
             try:
                 result = task_func()
+
+                # 只要本次任务中任意接口超时，立即放弃本次执行（不再重试后续任务）
+                if getattr(self.client, 'last_request_timeout', False):
+                    result = self._timeout_result()
 
                 if isinstance(result, dict):
                     status = result.get('status')
@@ -1841,6 +2278,10 @@ class TaskProcessor:
                         logger.info(f"任务[{task_name}]执行完成: {msg}")
                         self.task_results[task_name] = result
                         break
+                    elif status == 'timeout':
+                        logger.error(f"任务[{task_name}]因接口超时终止，放弃本次执行: {msg}")
+                        self.task_results[task_name] = result
+                        return False
                     elif status == "Unauthorized":
                         logger.error(f"任务[{task_name}]因未登录强行停止所有任务: {msg}")
                         self.task_results[task_name] = result
@@ -1876,6 +2317,10 @@ class TaskProcessor:
                     break
 
             except Exception as e:
+                if getattr(self.client, 'last_request_timeout', False):
+                    logger.error(f"任务[{task_name}]因接口超时终止，放弃本次执行: {e}")
+                    self.task_results[task_name] = self._timeout_result()
+                    return False
                 if attempt < self.retry_attempts:
                     logger.warning(f"任务[{task_name}]第{attempt}次执行异常: {e}，正在重试...")
                     time.sleep(random.uniform(1, 2))
@@ -1887,6 +2332,18 @@ class TaskProcessor:
                         'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
                     }
         return True
+
+    def _timeout_result(self) -> dict:
+        """构造统一的接口超时结果"""
+        url = getattr(self.client, 'last_timeout_url', '')
+        msg = '接口请求超时，已放弃本次执行'
+        if url:
+            msg += f'（{url}）'
+        return {
+            'status': 'timeout',
+            'msg': msg,
+            'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+        }
     
     def process_all_tasks(self) -> Dict[str, Any]:
         """处理所有任务"""
@@ -1894,6 +2351,8 @@ class TaskProcessor:
             ('签到任务', self.client.qdsign),
             ('激励碎片任务', self.client.advjob),
             ('章节卡任务', self.client.exadvjob),
+            ('广告加点任务', self.client.reading_advjob),
+            ('天降福利任务', self.client.dialog_advjob),
             ('游戏中心任务', self.client.do_game),
             ('每日抽奖任务', self.client.lottery),
             # ('其他任务', self.other_task_func),
@@ -1955,6 +2414,8 @@ class MainApp:
         logger = LoggerManager().logger
 
         logger.info(f"QDjob程序启动，当前版本为: {__version__}")
+        logger.info(f"接口超时设置: 连接 {REQUEST_CONNECT_TIMEOUT:g}s / 读取 {REQUEST_READ_TIMEOUT:g}s"
+                    f"（仅作兜底，可用 QDJOB_CONNECT_TIMEOUT / QDJOB_READ_TIMEOUT 覆盖）")
 
         if not self.pre_check():
             logger.error("预检查失败，程序终止")
@@ -1983,6 +2444,11 @@ class MainApp:
                 logger.info(f"开始检查用户[{user.username}]登录状态")
                 # 检查登录状态
                 nickname = client.check_login()
+                if client.last_request_timeout:
+                    timeout_msg = f"登录检测接口超时: {client.last_timeout_url}"
+                    logger.error(f"用户[{user.username}]{timeout_msg}，放弃该用户本次执行")
+                    self._send_notification(user, {'登录检测': {'status': 'timeout', 'msg': timeout_msg}})
+                    continue
                 if not nickname:
                     logger.warning(f"用户[{user.username}]未登录")
                     continue
@@ -2000,9 +2466,17 @@ class MainApp:
                         logger.warning(f"用户[{user.username}]cookies自动刷新失败: {refresh_msg}，继续后续流程")
                     # 单独推送一次cookies刷新结果
                     self._send_cookies_refresh_notification(user, is_success, refresh_msg, trigger="按间隔自动刷新")
+                    if client.last_request_timeout:
+                        logger.warning(f"用户[{user.username}]cookies刷新接口超时，跳过本次自动刷新")
+                        client.reset_timeout_state()
 
                 # 检测福利中心状态 有ptlogin，这个可以取消
                 WelfareStatus = client.check_riskstatus()
+                if client.last_request_timeout:
+                    timeout_msg = f"福利中心检测接口超时: {client.last_timeout_url}"
+                    logger.error(f"用户[{user.username}]{timeout_msg}，放弃该用户本次执行")
+                    self._send_notification(user, {'福利中心检测': {'status': 'timeout', 'msg': timeout_msg}})
+                    continue
                 login_status = WelfareStatus.get('login_status', True)
                 risk_status = WelfareStatus.get('risk_status', False)
                 if not login_status:
@@ -2096,6 +2570,9 @@ class MainApp:
                 
             except Exception as e:
                 logger.error(f"处理用户[{user.username}]时发生错误: {e}")
+                if 'client' in locals() and getattr(client, 'last_request_timeout', False):
+                    timeout_msg = f"运行过程中接口超时: {getattr(client, 'last_timeout_url', '')}"
+                    self._send_notification(user, {'运行异常': {'status': 'timeout', 'msg': timeout_msg}})
     
     def _need_refresh_cookies(self, user: UserConfig) -> bool:
         """根据配置的刷新间隔判断是否需要自动刷新cookies
@@ -2181,6 +2658,8 @@ class MainApp:
         total_count = len(results)
         has_captcha = False
         captcha_reason = ""
+        has_timeout = False
+        timeout_reason = ""
 
         for task_name, result in results.items():
             emoji = '❓'
@@ -2203,6 +2682,11 @@ class MainApp:
                     has_captcha = True
                     captcha_reason = result.get('msg', '打码失败')
                     detail_msg = detail_msg or captcha_reason
+                elif status == 'timeout':
+                    emoji = '⏱️'
+                    has_timeout = True
+                    timeout_reason = detail_msg or '接口请求超时'
+                    detail_msg = detail_msg or '接口请求超时，已放弃本次执行'
                 elif status == 'stop':
                     emoji = '⏸️'
                     detail_msg = detail_msg or result.get('msg', '主动停止')
@@ -2227,7 +2711,20 @@ class MainApp:
                 msg_text += f"原因: {captcha_reason}\n"
             msg_text += "建议：手动登录APP或抓包更新参数"
 
+        if has_timeout:
+            msg_text += "\n" + "-"*20 + "\n"
+            msg_text += "⏱️ 警告：接口请求超时，已放弃本次执行\n"
+            if timeout_reason:
+                msg_text += f"超时详情: {timeout_reason}\n"
+            msg_text += (
+                f"超时设置: 连接 {REQUEST_CONNECT_TIMEOUT:g}s / 读取 {REQUEST_READ_TIMEOUT:g}s\n"
+                "可能原因：网络抖动、DNS 解析异常、代理/VPN、IP 被临时风控。\n"
+                "建议：检查网络与 DNS 设置，切换网络后重试。"
+            )
+
         title = f"QDJob 运行报告 ({success_count}/{total_count})"
+        if has_timeout:
+            title = f"QDJob 运行超时中止 ({success_count}/{total_count})"
         
         # 发送所有推送服务
         for push_service in user.push_services:

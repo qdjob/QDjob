@@ -3,6 +3,18 @@ import os
 
 from logger import LoggerManager
 
+# 验证码相关网络请求超时（连接, 读取），默认 15 分钟，仅作兜底
+def _env_timeout(name: str, default: str) -> float:
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return float(default)
+
+REQUEST_TIMEOUT = (
+    _env_timeout('QDJOB_CONNECT_TIMEOUT', '900'),
+    _env_timeout('QDJOB_READ_TIMEOUT', '900'),
+)
+
 # 安全获取已配置的logger实例
 try:
     logger = LoggerManager().logger
@@ -57,7 +69,7 @@ def get_res_json(captcha_id):
         "callback": "_aq_396533",  # 每次都会变，应该不会校验这个参数，只是作为返回json的头
         "sess": ""
     }
-    response = requests.get(url, headers=headers, params=params)
+    response = requests.get(url, headers=headers, params=params, timeout=REQUEST_TIMEOUT)
     if response.status_code != 200:
         logger.error(f'获取验证码信息失败：{response.text}')
         return False
@@ -67,7 +79,7 @@ def get_res_json(captcha_id):
 def save_img(icon_img_url, bg_img_url):
     path_icon = os.path.join(temp_path, 'icon.jpg')
     path_bg = os.path.join(temp_path, 'bg.jpg')
-    response_icon = requests.get(url=icon_img_url)
+    response_icon = requests.get(url=icon_img_url, timeout=REQUEST_TIMEOUT)
     if response_icon.status_code != 200:
         logger.error(f'获取icon图片失败：{response_icon.text}')
         return False,'',''
@@ -76,7 +88,7 @@ def save_img(icon_img_url, bg_img_url):
         f.write(response_icon.content)
     logger.info(f'保存icon图片成功：{path_icon}')
 
-    response_bg = requests.get(url=bg_img_url)
+    response_bg = requests.get(url=bg_img_url, timeout=REQUEST_TIMEOUT)
     if response_bg.status_code != 200:
         logger.error(f'获取bg图片失败：{response_bg.text}')
         return False,'',''
@@ -88,7 +100,7 @@ def save_img(icon_img_url, bg_img_url):
 
 def save_tdc(url_tdc):
     path_tdc = os.path.join(temp_path, 'tdc.js')
-    response_tdc = requests.get(url=url_tdc, headers=headers)
+    response_tdc = requests.get(url=url_tdc, headers=headers, timeout=REQUEST_TIMEOUT)
     if response_tdc.status_code != 200:
         logger.error(f'获取TDC失败：{response_tdc.text}')
         return False
@@ -111,7 +123,7 @@ def get_collect_eks(tokenid, icon_path, bg_path, tdc_js_path, user_agent):
         'user_agent': user_agent
     }
 
-    response = requests.post(url=url, data=data, files=files)
+    response = requests.post(url=url, data=data, files=files, timeout=REQUEST_TIMEOUT)
     res = response.json()
     if response.status_code != 200:
         logger.error(f'获取验证码信息失败：{res}')
@@ -134,7 +146,7 @@ def get_pow_params(tokenid, prefix, md5):
         'prefix': prefix,
         'md5': md5
     }
-    response = requests.post(url=url, data=data)
+    response = requests.post(url=url, data=data, timeout=REQUEST_TIMEOUT)
     if response.status_code != 200:
         logger.error(f'获取pow参数失败：{response.text}')
         return False
@@ -153,7 +165,7 @@ def get_verify(collect, eks, sess, ans, pow_answer, pow_calc_time):
         "pow_answer": pow_answer,
         "pow_calc_time": pow_calc_time
     }
-    return requests.post(url, headers=headers, data=data)
+    return requests.post(url, headers=headers, data=data, timeout=REQUEST_TIMEOUT)
 
 
 def main(tokenid, captcha_a_id, user_agent):
@@ -220,7 +232,7 @@ def main(tokenid, captcha_a_id, user_agent):
 def save_img_slider(bg_img_url):
     path_bg = os.path.join(temp_path, 'bg.jpg')
 
-    response_bg = requests.get(url=bg_img_url)
+    response_bg = requests.get(url=bg_img_url, timeout=REQUEST_TIMEOUT)
     if response_bg.status_code != 200:
         logger.error(f'获取bg图片失败：{response_bg.text}')
         return False,''
@@ -244,7 +256,7 @@ def get_collect_eks_slider(tokenid, init_pos, bg_path, tdc_js_path, user_agent):
         'init_pos': json.dumps(init_pos)
     }
 
-    response = requests.post(url=url, data=data, files=files)
+    response = requests.post(url=url, data=data, files=files, timeout=REQUEST_TIMEOUT)
     res = response.json()
     if response.status_code != 200:
         logger.error(f'获取验证码信息失败：{res}')
@@ -266,7 +278,7 @@ def get_pow_params_slider(tokenid, prefix, md5):
         'prefix': prefix,
         'md5': md5
     }
-    response = requests.post(url=url, data=data)
+    response = requests.post(url=url, data=data, timeout=REQUEST_TIMEOUT)
     if response.status_code != 200:
         logger.error(f'获取pow参数失败：{response.text}')
         return False
@@ -285,7 +297,7 @@ def get_verify_slider(collect, eks, sess, ans, pow_answer, pow_calc_time):
         "pow_answer": pow_answer,
         "pow_calc_time": pow_calc_time
     }
-    return requests.post(url, headers=headers, data=data)
+    return requests.post(url, headers=headers, data=data, timeout=REQUEST_TIMEOUT)
 
 def main_slider(tokenid,captcha_a_id, user_agent):
     headers.update({'User-Agent': user_agent})
