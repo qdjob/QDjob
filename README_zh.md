@@ -120,7 +120,7 @@
 
 ## Contact
 [点此加入Telegram群组](https://t.me/+6xMW_7YK0o1jMDE1)  
-联系邮箱：janiquiz@163.com
+联系邮箱：janiquiz@126.com
 
 ## 叠甲
     本项目为个人项目，仅供学习交流使用，请勿用于非法用途，请于下载后24小时内删除。
