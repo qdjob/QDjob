@@ -242,6 +242,64 @@ class PushPlus(PushService):
         
 
 
+class Qmsg(PushService):
+    """Qmsg酱 v3 推送（QQ 消息）"""
+
+    API_BASE = "https://qmsg.zendee.cn/v3/send/"
+    # 官方限制：msg 最长 1800 个字符，超长会被拒绝
+    MAX_LENGTH = 1800
+
+    def __init__(self, key: str, group: str = ""):
+        self.key = key
+        self.group = group or ""
+        super().__init__()
+
+    def _validate_config(self):
+        """验证Qmsg配置"""
+        if not self.key:
+            logger.warning(f"[Qmsg配置] key 不能为空")
+        elif not isinstance(self.key, str):
+            raise ValueError("Qmsg 推送 key 必须为字符串类型")
+        if not isinstance(self.group, str):
+            raise ValueError("Qmsg 推送 group 必须为字符串类型")
+
+    def build_msg(self, title: str, content: str) -> str:
+        """拼装推送内容并裁剪到官方长度上限"""
+        msg = f"{title}\n{content}" if title else str(content or "")
+        if not msg.strip():
+            msg = "（无内容）"
+        if len(msg) > self.MAX_LENGTH:
+            msg = msg[: self.MAX_LENGTH - 3] + "..."
+        return msg
+
+    def send(self, title: str, content: str) -> dict:
+        """发送文本消息"""
+        if not self.key:
+            logger.error("[Qmsg] 推送失败: 未配置 key")
+            return {"success": False, "error": "未配置 qmsg key", "service": "qmsg"}
+
+        try:
+            url = f"{self.API_BASE}{self.key}"
+            data = {"msg": self.build_msg(title, content)}
+            if self.group:
+                data["group"] = self.group
+
+            response = requests.post(url, data=data, timeout=10)
+            response.raise_for_status()
+            result = response.json()
+
+            # 官方约定：以 success 字段判断业务是否成功（code 仅 0/500）
+            success = result.get("success") is True
+            if not success:
+                logger.debug(f"[Qmsg] 推送异常: {result}")
+
+            return {"success": success, "raw": result, "service": "qmsg"}
+
+        except Exception as e:
+            logger.error(f"[Qmsg] 推送异常: {str(e)}")
+            return {"success": False, "error": str(e), "service": "qmsg"}
+
+
 # 新增推送服务只需继承PushService基类
 class Telegram(PushService):
     def __init__(self, token: str, chat_id: str):

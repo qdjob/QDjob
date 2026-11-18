@@ -130,6 +130,8 @@ class ConfigManager:
                     push_service = QiweiPush(**config_without_type)
                 elif push_type == 'pushplus':
                     push_service = PushPlus(**config_without_type)
+                elif push_type == 'qmsg':
+                    push_service = Qmsg(**config_without_type)
                 else:
                     logger.warning(f"[推送配置] 用户[{user_data['username']}] 未知的推送类型: {push_type}")
                     continue
@@ -328,7 +330,7 @@ class ConfigManager:
             logger.error(f"用户[{user_data['username']}] 推送服务配置必须为列表类型")
             return False
 
-        valid_push_types = ['feishu', 'serverchan', 'qiwei', 'pushplus']
+        valid_push_types = ['feishu', 'serverchan', 'qiwei', 'pushplus', 'qmsg']
         for push_config in push_services:
             if not isinstance(push_config, dict):
                 logger.warning(f"用户[{user_data['username']}] 推送配置项不是字典类型")
@@ -378,6 +380,17 @@ class ConfigManager:
                     return False
                 if not isinstance(push_config.get('token', ''), str):
                     logger.warning(f"[配置错误] 用户[{user_data['username']}] PushPlus推送 token 必须为字符串类型")
+                    return False
+
+            elif push_type == 'qmsg':
+                if not push_config.get('key'):
+                    logger.warning(f"[配置错误] 用户[{user_data['username']}] Qmsg推送缺少必要字段: key")
+                    return False
+                if not isinstance(push_config.get('key', ''), str):
+                    logger.warning(f"[配置错误] 用户[{user_data['username']}] Qmsg推送 key 必须为字符串类型")
+                    return False
+                if push_config.get('group') and not isinstance(push_config.get('group', ''), str):
+                    logger.warning(f"[配置错误] 用户[{user_data['username']}] Qmsg推送 group 必须为字符串类型")
                     return False
 
         return True
