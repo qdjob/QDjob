@@ -12,7 +12,7 @@ from push import *
 from logger import LoggerManager
 from logger import DEFAULT_LOG_RETENTION
 
-__version__ = 'v1.4.3'
+__version__ = 'v1.4.4'
 
 # 配置常量
 CONFIG_FILE = 'config.json'

@@ -4,7 +4,7 @@
 WebUI 与 GUI 共享同一份版本与作者信息，避免多处硬编码。
 """
 
-VERSION = "v1.4.3"
+VERSION = "v1.4.4"
 AUTHOR = "JaniQuiz"
 PROJECT = "QDjob"
 
