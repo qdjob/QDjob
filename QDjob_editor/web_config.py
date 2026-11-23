@@ -33,7 +33,7 @@ TASK_NAMES = [
 ]
 
 # 推送服务类型
-PUSH_SERVICE_TYPES = ["feishu", "serverchan", "qiwei", "pushplus"]
+PUSH_SERVICE_TYPES = ["feishu", "serverchan", "qiwei", "pushplus", "qmsg"]
 
 # 默认 cookies 模板（与 GUI.ConfigEditor.DEFAULT_COOKIES_TEMPLATE 一致）
 DEFAULT_COOKIES_TEMPLATE = {

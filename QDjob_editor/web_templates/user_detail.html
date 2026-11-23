@@ -650,6 +650,8 @@ function pushSummary(s) {
   if (s.type === 'qiwei') return 'Webhook: ...' + String(s.webhook_url || '').slice(-18) +
     '（用户 ' + (s.userids || []).length + ' / 手机 ' + (s.phoneids || []).length + '）';
   if (s.type === 'pushplus') return 'Token: ...' + String(s.token || '').slice(-10);
+  if (s.type === 'qmsg') return 'Key: ...' + String(s.key || '').slice(-8) +
+    (s.group ? '（群 ' + s.group + '）' : '（私聊）');
   return '';
 }
 
@@ -677,7 +679,8 @@ UI.qs('#add-push').addEventListener('click', function () {
     '<option value="feishu">feishu 飞书</option>' +
     '<option value="serverchan">serverchan Server酱</option>' +
     '<option value="qiwei">qiwei 企业微信</option>' +
-    '<option value="pushplus">pushplus</option></select></div>' +
+    '<option value="pushplus">pushplus</option>' +
+    '<option value="qmsg">qmsg Qmsg酱（QQ）</option></select></div>' +
     '<div id="p-fields"></div>' +
     '<div class="modal-actions"><button class="btn" id="p-cancel">取消</button>' +
     '<button class="btn primary" id="p-ok">添加</button></div>'
@@ -697,6 +700,9 @@ UI.qs('#add-push').addEventListener('click', function () {
         pushFieldHtml('p-phoneids', '手机号（逗号分隔）', '');
     } else if (t === 'pushplus') {
       html = pushFieldHtml('p-token', 'Token', '') + pushFieldHtml('p-topic', '群组ID（可留空）', '');
+    } else if (t === 'qmsg') {
+      html = pushFieldHtml('p-key', 'API Key', '') +
+        pushFieldHtml('p-group', 'QQ群号（可留空，留空为私聊）', '');
     }
     UI.qs('#p-fields').innerHTML = html;
   }
@@ -723,6 +729,10 @@ UI.qs('#add-push').addEventListener('click', function () {
       service.token = UI.qs('#p-token').value.trim();
       if (!service.token) { UI.toast('Token 不能为空', 'warn'); return; }
       service.topic = UI.qs('#p-topic').value.trim();
+    } else if (t === 'qmsg') {
+      service.key = UI.qs('#p-key').value.trim();
+      if (!service.key) { UI.toast('API Key 不能为空', 'warn'); return; }
+      service.group = UI.qs('#p-group').value.trim();
     }
     const newList = pushServices.concat([service]);
     const res = await UI.api('PUT', '/api/users/' + encodeURIComponent(USERNAME), { push_services: newList });
